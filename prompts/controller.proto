@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package controller.v1;
+
+option go_package = "example.com/go-vxlan-controller/gen/controller/v1;controllerv1";
+
+// ControllerStateUpdate is the primary message broadcast from a controller to all clients.
+// It contains all necessary state for a client to operate, and can be delivered as
+// a full snapshot or an incremental delta update.
+message ControllerStateUpdate {
+  // The epoch number for this state update. This is monotonically increasing for each controller.
+  uint64 epoch = 1;
+
+  // Current number of clients connected to this controller.
+  uint32 client_count = 2;
+
+  // Time in minutes since the last client joined or left, indicating controller stability.
+  uint32 last_client_change_timestamp_minutes = 3;
+
+  // The full VXLAN configuration. This is always sent in its entirety as it's small and critical.
+  VxlanConfig vxlan_config = 4;
+
+  // The full probing configuration. Also sent in its entirety.
+  ProbingConfig probing_config = 5;
+
+  // The network view, containing updates for peers, MACs, and routing.
+  NetworkViewUpdate network_view = 6;
+}
+
+// VxlanConfig mirrors the configuration file settings for the VXLAN overlay.
+message VxlanConfig {
+  uint32 vni = 1;
+  uint32 port = 2;
+  uint32 mtu = 3;
+}
+
+// ProbingConfig mirrors the configuration file settings for peer-to-peer probing.
+message ProbingConfig {
+  uint32 probe_interval_s = 1;
+  uint32 probe_times = 2;
+  uint32 in_probe_interval_ms = 3;
+  uint32 probe_timeout_ms = 4;
+}
+
+// NetworkViewUpdate contains the dynamic state of the network. It can represent
+// a full snapshot or a set of incremental changes (deltas).
+message NetworkViewUpdate {
+  // If true, the client MUST discard its old network view and replace it
+  // entirely with the contents of this message.
+  // If false, the client should apply the changes as deltas to its existing view.
+  bool full_update = 1;
+
+  // List of peers to add or update.
+  // For a full update, this contains all active peers.
+  // For a delta, it contains new peers or peers with changed endpoints (roaming).
+  repeated Peer peers = 2;
+
+  // List of peer public keys (as bytes) to remove.
+  // This field is only used for delta updates (when full_update is false).
+  repeated bytes removed_peers = 3;
+
+  // List of MAC address mappings to add or update.
+  // For a full update, this contains all known MACs.
+  // For a delta, it contains new or moved MACs.
+  repeated MacEntry mac_entries = 4;
+
+  // List of MAC addresses (as bytes) to remove.
+  // This field is only used for delta updates (when full_update is false).
+  repeated bytes removed_macs = 5;
+
+  // The full routing table, mapping each destination peer to its next-hop peer.
+  // Since routing is calculated for the entire graph (e.g., via Floyd-Warshall),
+  // it's simplest to always send the complete table. The client replaces its
+  // old routing table with this one on every update.
+  map<bytes, bytes> routing_table = 6; // Key: Destination Peer Pubkey, Value: Next-Hop Peer Pubkey
+}
+
+// Peer represents a single client node in the network.
+message Peer {
+  // The client's static public key, used as its unique identifier.
+  bytes public_key = 1;
+
+  // The controller-discovered public IPv4 endpoint (IP:Port).
+  string endpoint_v4 = 2;
+
+  // The controller-discovered public IPv6 endpoint (IP:Port).
+  string endpoint_v6 = 3;
+}
+
+// MacEntry represents a MAC address learned by a specific peer.
+message MacEntry {
+  // The hardware MAC address (6 bytes).
+  bytes mac_address = 1;
+
+  // The public key of the peer that owns this MAC address.
+  bytes owner_peer_public_key = 2;
+}
+
+// ClientStateRequest is sent by a client on connection or reconnection
+// to request the current network state from a controller.
+message ClientStateRequest {
+  // The last epoch number the client successfully processed from this controller.
+  // A value of 0 indicates the client has no prior state and requires a full snapshot.
+  uint64 last_seen_epoch = 1;
+}
