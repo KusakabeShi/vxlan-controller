@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package vxlancontroller;
+
+option go_package = "vxlan-controller/proto";
+
+// Client → Controller
+message ClientRegister {
+  bytes client_id = 1; // 32 bytes pubkey
+  map<string, AFEndpoint> af_endpoints = 2; // key = af_name
+}
+
+message AFEndpoint {
+  uint32 probe_port = 1;
+  uint32 vxlan_dst_port = 2;
+}
+
+// MAC/Neighbor update from Client
+message MACUpdate {
+  repeated Type2Route routes = 1;
+  bool is_full = 2; // true = full replacement, false = incremental
+}
+
+message Type2Route {
+  bytes mac = 1; // 6 bytes
+  bytes ip = 2;  // 4 or 16 bytes
+}
+
+// Controller → Client: full state
+message ControllerState {
+  uint32 client_count = 1;
+  int64 last_client_change_timestamp = 2; // unix nano
+  map<string, ClientInfoProto> clients = 3; // key = hex(client_id)
+  RouteMatrixProto route_matrix = 4;
+  repeated RouteTableEntryProto route_table = 5;
+  bytes controller_id = 6; // 32 bytes
+}
+
+message ClientInfoProto {
+  bytes client_id = 1;
+  map<string, EndpointProto> endpoints = 2; // key = af_name
+  int64 last_seen = 3;
+  repeated Type2Route routes = 4;
+  double additional_cost = 5;
+}
+
+message EndpointProto {
+  bytes ip = 1; // 4 or 16 bytes
+  uint32 probe_port = 2;
+  uint32 vxlan_dst_port = 3;
+}
+
+// Controller → Client: incremental update
+message ControllerStateUpdate {
+  oneof update {
+    ClientJoined client_joined = 1;
+    ClientLeft client_left = 2;
+    RouteMatrixUpdateProto route_matrix_update = 3;
+    RouteTableUpdateProto route_table_update = 4;
+    ClientInfoUpdateProto client_info_update = 5;
+  }
+}
+
+message ClientJoined {
+  ClientInfoProto client_info = 1;
+}
+
+message ClientLeft {
+  bytes client_id = 1;
+}
+
+message RouteMatrixUpdateProto {
+  RouteMatrixProto route_matrix = 1; // full replacement of route matrix
+}
+
+message RouteTableUpdateProto {
+  repeated RouteTableEntryProto entries = 1; // full replacement of route table
+}
+
+message ClientInfoUpdateProto {
+  ClientInfoProto client_info = 1;
+}
+
+message RouteMatrixProto {
+  // entries[i] is row: src_client -> dst_client -> route_entry
+  repeated RouteMatrixRow rows = 1;
+}
+
+message RouteMatrixRow {
+  bytes src_client_id = 1;
+  repeated RouteMatrixCell cells = 2;
+}
+
+message RouteMatrixCell {
+  bytes dst_client_id = 1;
+  bytes nexthop_id = 2;
+  string af_name = 3;
+}
+
+message RouteTableEntryProto {
+  bytes mac = 1;
+  bytes ip = 2;
+  map<string, int64> owners = 3; // key = hex(client_id), value = expire_time unix nano
+}
+
+// Controller → Client
+message ControllerProbeRequest {
+  uint64 probe_id = 1;
+  uint32 probe_timeout_ms = 2;
+  uint32 probe_times = 3;
+  uint32 in_probe_interval_ms = 4;
+}
+
+// Client → Controller
+message ProbeResults {
+  uint64 probe_id = 1;
+  bytes source_client_id = 2;
+  map<string, ProbeResultEntry> results = 3; // key = hex(dst_client_id)
+}
+
+message ProbeResultEntry {
+  map<string, AFProbeResult> af_results = 1; // key = af_name
+}
+
+message AFProbeResult {
+  double latency_mean = 1;
+  double latency_std = 2;
+  double packet_loss = 3;
+  int32 priority = 4;
+}
+
+// Probe channel messages (serialized, then encrypted)
+message ProbeRequest {
+  uint64 probe_id = 1;
+  int64 src_timestamp = 2; // unix nano
+}
+
+message ProbeResponse {
+  uint64 probe_id = 1;
+  int64 dst_timestamp = 2; // unix nano
+}
+
+// Broadcast relay
+message MulticastForward {
+  bytes source_client_id = 1;
+  bytes payload = 2; // raw ethernet frame
+}
+
+message MulticastDeliver {
+  bytes source_client_id = 1;
+  bytes payload = 2; // raw ethernet frame
+}

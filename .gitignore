@@ -1,0 +1,25 @@
+# Binaries
+vxlan-controller
+vxlan-client
+keygen
+controller
+client
+
+# Test artifacts
+test.sh
+tests/*.log
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
