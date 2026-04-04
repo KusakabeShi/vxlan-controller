@@ -2,6 +2,7 @@ package ntp
 
 import (
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,25 +20,53 @@ func New(servers []string) *TimeSync {
 	return &TimeSync{servers: servers}
 }
 
-// Sync queries NTP servers and updates the offset.
+// Sync queries all NTP servers, trims outliers if >4 results, and averages.
 func (ts *TimeSync) Sync() error {
+	var offsets []time.Duration
+
 	for _, server := range ts.servers {
 		resp, err := ntp.Query(server)
 		if err != nil {
+			log.Printf("[NTP] query %s failed: %v", server, err)
 			continue
 		}
 		if err := resp.Validate(); err != nil {
+			log.Printf("[NTP] validate %s failed: %v", server, err)
 			continue
 		}
+		offsets = append(offsets, resp.ClockOffset)
+	}
 
-		ts.mu.Lock()
-		ts.offset = resp.ClockOffset
-		ts.mu.Unlock()
-
-		log.Printf("[NTP] synced with %s, offset=%v", server, resp.ClockOffset)
+	if len(offsets) == 0 {
+		log.Printf("[NTP] no servers responded, keeping current offset")
 		return nil
 	}
-	return nil // non-fatal: keep running with current offset
+
+	// Sort for trimming
+	sort.Slice(offsets, func(i, j int) bool {
+		return offsets[i] < offsets[j]
+	})
+
+	// Trim highest and lowest if >4 results
+	trimmed := offsets
+	if len(offsets) > 4 {
+		trimmed = offsets[1 : len(offsets)-1]
+	}
+
+	// Average
+	var sum time.Duration
+	for _, o := range trimmed {
+		sum += o
+	}
+	avg := sum / time.Duration(len(trimmed))
+
+	ts.mu.Lock()
+	ts.offset = avg
+	ts.mu.Unlock()
+
+	log.Printf("[NTP] synced: %d/%d servers responded, offset=%v (used %d after trim)",
+		len(offsets), len(ts.servers), avg, len(trimmed))
+	return nil
 }
 
 // Now returns the corrected current time.

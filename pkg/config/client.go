@@ -34,6 +34,8 @@ type ClientAFConfigFile struct {
 	VxlanVNI          uint32                          `yaml:"vxlan_vni"`
 	VxlanMTU          int                             `yaml:"vxlan_mtu"`
 	VxlanDstPort      uint16                          `yaml:"vxlan_dst_port"`
+	VxlanSrcPortStart uint16                          `yaml:"vxlan_src_port_start"`
+	VxlanSrcPortEnd   uint16                          `yaml:"vxlan_src_port_end"`
 	Priority          int                             `yaml:"priority"`
 	Controllers       []ControllerEndpointFile        `yaml:"controllers"`
 }
@@ -67,6 +69,8 @@ type ClientAFConfig struct {
 	VxlanVNI          uint32
 	VxlanMTU          int
 	VxlanDstPort      uint16
+	VxlanSrcPortStart uint16
+	VxlanSrcPortEnd   uint16
 	Priority          int
 	Controllers       []ControllerEndpoint
 }
@@ -82,16 +86,26 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	var raw ClientConfigFile
+	// Start from defaults, then overlay user config
+	raw := DefaultClientConfig
+	raw.AFSettings = nil // clear so user must specify
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
+	if len(raw.NTPServers) == 0 {
+		raw.NTPServers = DefaultNTPServers
+	}
+
 	cfg := &ClientConfig{
-		BridgeName:    raw.BridgeName,
-		ClampMSSToMTU: raw.ClampMSSToMTU,
-		NeighSuppress: raw.NeighSuppress,
-		NTPServers:    raw.NTPServers,
+		BridgeName:       raw.BridgeName,
+		ClampMSSToMTU:    raw.ClampMSSToMTU,
+		NeighSuppress:    raw.NeighSuppress,
+		NTPServers:       raw.NTPServers,
+		FDBDebounceMs:    raw.FDBDebounceMs,
+		FDBDebounceMaxMs: raw.FDBDebounceMaxMs,
+		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
+		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
 	}
 
 	// Parse private key
@@ -103,26 +117,6 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		return nil, fmt.Errorf("private_key must be 32 bytes, got %d", len(keyBytes))
 	}
 	copy(cfg.PrivateKey[:], keyBytes)
-
-	// Defaults
-	cfg.FDBDebounceMs = raw.FDBDebounceMs
-	if cfg.FDBDebounceMs == 0 {
-		cfg.FDBDebounceMs = 500
-	}
-	cfg.FDBDebounceMaxMs = raw.FDBDebounceMaxMs
-	if cfg.FDBDebounceMaxMs == 0 {
-		cfg.FDBDebounceMaxMs = 3000
-	}
-	if raw.InitTimeout == 0 {
-		cfg.InitTimeout = 10 * time.Second
-	} else {
-		cfg.InitTimeout = time.Duration(raw.InitTimeout) * time.Second
-	}
-	if raw.NTPPeriodH == 0 {
-		cfg.NTPPeriod = 23 * time.Hour
-	} else {
-		cfg.NTPPeriod = time.Duration(raw.NTPPeriodH) * time.Hour
-	}
 
 	// Parse AF settings
 	cfg.AFSettings = make(map[types.AFName]*ClientAFConfig)
@@ -137,6 +131,8 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 			VxlanVNI:          afRaw.VxlanVNI,
 			VxlanMTU:          afRaw.VxlanMTU,
 			VxlanDstPort:      afRaw.VxlanDstPort,
+			VxlanSrcPortStart: afRaw.VxlanSrcPortStart,
+			VxlanSrcPortEnd:   afRaw.VxlanSrcPortEnd,
 			Priority:          afRaw.Priority,
 		}
 

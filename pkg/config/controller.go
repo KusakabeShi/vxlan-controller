@@ -84,12 +84,27 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	var raw ControllerConfigFile
+	// Start from defaults, then overlay user config
+	raw := DefaultControllerConfig
+	raw.AFSettings = nil      // clear so user must specify
+	raw.AllowedClients = nil  // clear so user must specify
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
-	cfg := &ControllerConfig{}
+	cfg := &ControllerConfig{
+		ClientOfflineTimeout:      time.Duration(raw.ClientOfflineTimeout) * time.Second,
+		SyncNewClientDebounce:     time.Duration(raw.SyncNewClientDebounce) * time.Second,
+		SyncNewClientDebounceMax:  time.Duration(raw.SyncNewClientDebounceMax) * time.Second,
+		TopologyUpdateDebounce:    time.Duration(raw.TopologyUpdateDebounce) * time.Second,
+		TopologyUpdateDebounceMax: time.Duration(raw.TopologyUpdateDebounceMax) * time.Second,
+		Probing: ProbingConfig{
+			ProbeIntervalS:    raw.Probing.ProbeIntervalS,
+			ProbeTimes:        raw.Probing.ProbeTimes,
+			InProbeIntervalMs: raw.Probing.InProbeIntervalMs,
+			ProbeTimeoutMs:    raw.Probing.ProbeTimeoutMs,
+		},
+	}
 
 	// Parse private key
 	keyBytes, err := base64.StdEncoding.DecodeString(raw.PrivateKey)
@@ -100,51 +115,6 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 		return nil, fmt.Errorf("private_key must be 32 bytes, got %d", len(keyBytes))
 	}
 	copy(cfg.PrivateKey[:], keyBytes)
-
-	// Defaults
-	if raw.ClientOfflineTimeout == 0 {
-		cfg.ClientOfflineTimeout = 300 * time.Second
-	} else {
-		cfg.ClientOfflineTimeout = time.Duration(raw.ClientOfflineTimeout) * time.Second
-	}
-	if raw.SyncNewClientDebounce == 0 {
-		cfg.SyncNewClientDebounce = 2 * time.Second
-	} else {
-		cfg.SyncNewClientDebounce = time.Duration(raw.SyncNewClientDebounce) * time.Second
-	}
-	if raw.SyncNewClientDebounceMax == 0 {
-		cfg.SyncNewClientDebounceMax = 10 * time.Second
-	} else {
-		cfg.SyncNewClientDebounceMax = time.Duration(raw.SyncNewClientDebounceMax) * time.Second
-	}
-	if raw.TopologyUpdateDebounce == 0 {
-		cfg.TopologyUpdateDebounce = 1 * time.Second
-	} else {
-		cfg.TopologyUpdateDebounce = time.Duration(raw.TopologyUpdateDebounce) * time.Second
-	}
-	if raw.TopologyUpdateDebounceMax == 0 {
-		cfg.TopologyUpdateDebounceMax = 5 * time.Second
-	} else {
-		cfg.TopologyUpdateDebounceMax = time.Duration(raw.TopologyUpdateDebounceMax) * time.Second
-	}
-
-	// Probing
-	cfg.Probing.ProbeIntervalS = raw.Probing.ProbeIntervalS
-	if cfg.Probing.ProbeIntervalS == 0 {
-		cfg.Probing.ProbeIntervalS = 60
-	}
-	cfg.Probing.ProbeTimes = raw.Probing.ProbeTimes
-	if cfg.Probing.ProbeTimes == 0 {
-		cfg.Probing.ProbeTimes = 5
-	}
-	cfg.Probing.InProbeIntervalMs = raw.Probing.InProbeIntervalMs
-	if cfg.Probing.InProbeIntervalMs == 0 {
-		cfg.Probing.InProbeIntervalMs = 200
-	}
-	cfg.Probing.ProbeTimeoutMs = raw.Probing.ProbeTimeoutMs
-	if cfg.Probing.ProbeTimeoutMs == 0 {
-		cfg.Probing.ProbeTimeoutMs = 1000
-	}
 
 	// Parse AF settings
 	cfg.AFSettings = make(map[types.AFName]*ControllerAFConfig)
