@@ -239,7 +239,7 @@ main goroutine
 | `handleTCPConn` | M (每條 TCP 連線) | 執行 Noise IK handshake → 識別 ClientID → 進入訊息讀取迴圈，處理 ClientRegister / MAC 上報 / ProbeResults 等 |
 | `udpReadLoop` | N (每個 AF 一個) | 讀取 UDP 封包，解密後分發 MulticastForward（轉發給其他 Client） |
 | `clientSendLoop` | K (每個已連線 Client 一個) | 從 `SendQueue` channel 取出訊息 → 透過 active AF 的 TCP 連線加密發送。當 `Synced=false` 時觸發重新全量同步 |
-| `offlineChecker` | 1 | 每隔 N 秒掃描所有 Client 的 `LastSeen`，超過 `ClientOfflineTimeout` 的移除並重算路由 |
+| `offlineChecker` | 1 | 每隔 N 秒掃描所有 Client 的 `LastSeen`，超過 `ClientOfflineTimeout` 且無 active TCP 連線的才移除並重算路由。有 active 連線時刷新 `LastSeen` |
 
 ### 2.3 Controller 關鍵流程
 
@@ -251,11 +251,17 @@ handleTCPConn:
   2. 讀取 ClientRegister 訊息
   3. mu.Lock()
   4. 更新/建立 ClientInfo（Endpoints, LastSeen）
+     - 若已存在 Client 且 Endpoint IP 變更 → 標記 ipChanged
   5. 設定 AFConn, 判斷 ActiveAF（最早連線的 AF）
+     - 替換舊 AFConn 時先 close(oldAfc.Done) + oldAfc.TCPConn.Close()
   6. 若此 AF 是 ActiveAF → 產生 ControllerState 快照推入 SendQueue, 標記 Synced=true
-  7. 更新 LastClientChange, 重設 newClientTimer (sync_new_client_debounce)
+  7. 新 Client: 更新 LastClientChange, 重設 newClientTimer, pushDelta(ClientJoined)
+     已有 Client: pushDelta(ClientInfoUpdate)
+     - 若 ipChanged → 同時觸發 resetNewClientDebounce() 重新 probe + 拓撲更新
   8. mu.Unlock()
-  9. 進入訊息讀取迴圈
+  9. 進入訊息讀取迴圈（tcpRecvLoop）
+  10. tcpRecvLoop 結束後 → handleDisconnect(cc, af, afc)
+      - 僅當 cc.AFConns[af] == afc 時才刪除（避免舊連線 cleanup 誤刪新連線）
 ```
 
 #### State Mutation（增量推送）
@@ -369,6 +375,12 @@ type Client struct {
     // === FDB 狀態 ===
     CurrentFDB    map[fdbKey]fdbEntry   // 目前已寫入 kernel 的 FDB
 
+    // === Probe ===
+    probeSessions    *SessionManager       // probe channel 的 session 管理
+    probeConns       map[AFName]*net.UDPConn // 每個 AF 的 probe UDP socket
+    probeResponseChs map[uint64]chan probeResponseData // probe_id → response 收集器
+    probeResultsMu   sync.Mutex
+
     // === NTP ===
     TimeOffset    time.Duration         // 本地時鐘與 NTP 的偏差
 
@@ -444,15 +456,15 @@ main goroutine
 | Goroutine | 數量 | 職責 |
 |-----------|------|------|
 | `ntpSyncLoop` | 1 | 定期向 `ntp_servers` 校時，更新 `TimeOffset` |
-| `tcpConnLoop` | C*A (每個 Controller 的每個 AF) | 建立 TCP → Noise IK handshake → 發送 ClientRegister → 啟動 `tcpRecvLoop`。斷線後指數退避重連 |
+| `tcpConnLoop` | C*A (每個 Controller 的每個 AF) | 建立 TCP → Noise IK handshake → 發送 ClientRegister → 啟動 `tcpRecvLoop`。斷線後指數退避重連（1s→2s→...→30s），連線存活超過 10s 時重設退避 |
 | `tcpRecvLoop` | C*A | 讀取 TCP 訊息（ControllerState / ControllerStateUpdate），更新 `ControllerView`。收到全量更新時切換 `ActiveAF` |
-| `probeListenLoop` | A (每個 AF) | 監聽 probe UDP port，收到 ProbeRequest 原路回覆 ProbeResponse |
+| `probeListenLoop` | A (每個 AF) | 監聽 probe UDP port，收到 ProbeRequest 解析 payload 取出 probe_id + src_timestamp，回覆 ProbeResponse{probe_id, dst_timestamp, src_timestamp}。收到 ProbeResponse 按 probe_id 路由到對應批次收集器 |
 | `neighborWatchLoop` | 1 | 透過 netlink 訂閱 `RTM_NEWNEIGH` / `RTM_DELNEIGH`，debounce 後上報所有 Controller |
 | `tapReadLoop` | 1 | 從 `TapFD` 讀取 broadcast 封包 → rate limit → 透過 active AF 的 UDP 上傳 Controller (MulticastForward) |
 | `tapWriteLoop` | 1 | 從 channel 取出 Controller relay 來的 broadcast 封包 → 寫入 `TapFD` 注入 bridge |
 | `fdbReconcileLoop` | 1 | 監聽 `RouteMatrix` 或 `RouteTable` 變更通知 (channel) → 重新計算 FDB → diff 寫入 kernel (`netlink`) |
 | `authoritySelectLoop` | 1 | `init_timeout` 後選擇權威 Controller；之後當 Controller Synced 狀態變化時重新評估 |
-| `apiServer` | 1 | HTTP/Unix socket API，暴露 bind_addr 讀寫等操作 |
+| `apiServer` | 1 | Unix socket API (`/tmp/vxlan-client-<id>.sock`)，支援 `GET_BIND_ADDR <af>` 和 `UPDATE_BIND_ADDR <af> <ip>` 指令。更新時：修改 config → `ip link set` 更新 VXLAN local → 關閉 TCP/UDP 連線強制重連 → 重啟 probe listener |
 
 ### 3.3 Client 關鍵流程
 
@@ -496,14 +508,31 @@ selectAuthority():
 tcpRecvLoop 收到 ControllerProbeRequest:
   1. 檢查是否來自權威 Controller → 否則忽略
   2. spawn probeExecGoroutine(request):
+     responseChs[probe_id] = make(chan)   // 按 probe_id 路由 response
+     sent = map[peer,af] → 0             // 計數：已發送
      for i := 0; i < probe_times; i++:
+       srcTimestamp = ntp.Now()
        for each peer in knownClients:
          for each AF where self.enabled && peer.enabled:
-           send ProbeRequest via probe channel UDP
+           send ProbeRequest{probe_id, src_timestamp} via probe channel UDP
+           sent[peer,af]++
        sleep(in_probe_interval_ms)
-     wait(probe_timeout_ms) for remaining responses
-     aggregate results → ProbeResults
+     wait(probe_timeout_ms), collect from responseChs[probe_id]:
+       latency = resp.dst_timestamp - resp.src_timestamp  // 單向 local→peer
+       latencies[peer,af].append(latency)
+     delete(responseChs[probe_id])
+     for each (peer,af):
+       packet_loss = 1.0 - len(latencies[peer,af]) / sent[peer,af]
+       latency_mean = mean(latencies[peer,af])
+       latency_std  = std(latencies[peer,af])
      send ProbeResults to ALL Controllers (via active AF TCP)
+
+  probeListenLoop 收到 ProbeRequest:
+    解析 payload → req{probe_id, src_timestamp}
+    回覆 ProbeResponse{probe_id, dst_timestamp=ntp.Now(), src_timestamp=req.src_timestamp}
+
+  probeListenLoop 收到 ProbeResponse:
+    根據 resp.probe_id 路由到 responseChs[probe_id]（忽略無對應 channel 的 late response）
 ```
 
 #### FDB 寫入
@@ -660,10 +689,13 @@ Client A                                  Client B
   │──── HandshakeInit ───────────────────────>│
   │<─── HandshakeResp ───────────────────────│
   │                                           │
-  │──── ProbeRequest {probe_id, timestamp} ─>│
-  │<─── ProbeResponse {probe_id, timestamp} ─│
+  │──── ProbeRequest {probe_id, src_ts} ─────>│
+  │<─── ProbeResponse {probe_id, src_ts,     ─│
+  │                     dst_ts}                │
   │                                           │
-  │  計算單向延遲 = dst_timestamp - src_timestamp
+  │  按 probe_id 路由到對應批次收集器
+  │  單向延遲 = dst_ts - src_ts (local→peer)
+  │  丟包率 = 1 - received / sent
 ```
 
 ### 6.3 Broadcast Relay (UDP Communication Channel)

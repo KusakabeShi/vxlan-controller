@@ -138,6 +138,7 @@ message ProbeRequest {
 message ProbeResponse {
   uint64 probe_id = 1;
   int64 dst_timestamp = 2; // unix nano
+  int64 src_timestamp = 3; // echo back sender's src_timestamp
 }
 
 // Broadcast relay

@@ -22,6 +22,7 @@ type ClientConfigFile struct {
 	FDBDebounceMaxMs  int                             `yaml:"fdb_debounce_max_ms"`
 	InitTimeout       int                             `yaml:"init_timeout"`
 	NTPServers        []string                        `yaml:"ntp_servers"`
+	NTPPeriodH        int                             `yaml:"ntp_period_h"`
 }
 
 type ClientAFConfigFile struct {
@@ -53,6 +54,7 @@ type ClientConfig struct {
 	FDBDebounceMaxMs int
 	InitTimeout      time.Duration
 	NTPServers       []string
+	NTPPeriod        time.Duration
 }
 
 type ClientAFConfig struct {
@@ -115,6 +117,11 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		cfg.InitTimeout = 10 * time.Second
 	} else {
 		cfg.InitTimeout = time.Duration(raw.InitTimeout) * time.Second
+	}
+	if raw.NTPPeriodH == 0 {
+		cfg.NTPPeriod = 23 * time.Hour
+	} else {
+		cfg.NTPPeriod = time.Duration(raw.NTPPeriodH) * time.Hour
 	}
 
 	// Parse AF settings

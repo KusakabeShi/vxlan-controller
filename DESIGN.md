@@ -230,12 +230,14 @@ Controller 配置:
 9. Client 執行 Probe
     * Client 需要按照 in_probe_interval_ms 間隔，總共發出 probe_times 個 probe
     * 透過 probe channel ，對所有的其他 Client 發送 ProbeRequest
-      * ProbeRequest 包含一個 probe_id 和 src_timestamp
+      * ProbeRequest 包含 probe_id 和 src_timestamp（NTP 校準後的本地時間戳）
       * 如果自己的 v4+v6 enable ，且對面也是，v4+v6 兩個 probe channel 都會發送
+      * 每輪 probe 共發 probe_times 個 ProbeRequest 給每個 peer 的每個 AF，以 in_probe_interval_ms 為間隔
     * 收到 ProbeRequest 以後，原路返回 ProbeResponse
-      * ProbeResponse 包含 probe_id 和 dst_timestamp
-    * 收到 ProbeResponse 以後，和 src_timestamp 和 dst_timestamp 對比，得到「本地→遠端」的單向延遲
-    * 當 probe_times 個 probe 都完成或超時以後，整合 ProbeResult 上傳給**所有 Controller**
+      * ProbeResponse 包含 probe_id（原封回傳，用於路由到正確的 probe 批次，避免跨批次的 late response 污染）、dst_timestamp（接收端 NTP 時間戳）、src_timestamp（原封回傳發送端的時間戳）
+    * 收到 ProbeResponse 以後，根據 probe_id 路由到對應的 probe 批次收集器，計算單向延遲 = dst_timestamp - src_timestamp（local→peer 方向，依賴 NTP 校準）
+    * 丟包率計算：每個 (peer, AF) 組合記錄 sent 計數（= probe_times）和 received 計數（在 probe_timeout 內收到的 response 數），PacketLoss = 1.0 - received / sent
+    * 當 probe_timeout 到期後，整合 ProbeResults 上傳給**所有 Controller**
         * 為什麼是**所有 Controller**呢?
         * 因為前面的設計「只處理權威控制器發來的 ControllerProbeRequest」
         * 如果所有控制器來的 ControllerProbeRequest 都處裡，會導致重複的 Probe 太多
