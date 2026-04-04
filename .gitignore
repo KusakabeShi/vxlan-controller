@@ -1,0 +1,6 @@
+.bin/
+.test-work/
+.test-work-debug/
+
+*.log
+

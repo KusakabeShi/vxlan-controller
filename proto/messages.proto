@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package vxlancontroller;
+
+option go_package = "vxlan-controller/proto;proto";
+
+message ClientRegister {
+  bytes client_id = 1; // 32 bytes public key
+  repeated ClientRegisterAF afs = 2;
+}
+
+message ClientRegisterAF {
+  string af_name = 1;           // e.g. "v4", "v6", "asia_v4"
+  uint32 probe_port = 2;        // UDP
+  uint32 vxlan_dstport = 3;     // UDP dstport for VXLAN data plane
+  int32 priority = 4;           // lower is better
+}
+
+message RouteUpdateBatch {
+  repeated RouteUpdate updates = 1;
+}
+
+message RouteUpdate {
+  enum Op {
+    OP_UNSPECIFIED = 0;
+    OP_ADD = 1;
+    OP_DEL = 2;
+  }
+  Op op = 1;
+  MacIpEntry entry = 2;
+}
+
+message MacIpEntry {
+  bytes mac = 1; // 6 bytes
+  bytes ip = 2;  // 0 bytes means "unknown"
+}
+
+message ControllerProbeRequest {
+  uint64 batch_id = 1; // controller-generated id for this probe batch
+  uint32 probe_times = 2;
+  uint32 in_probe_interval_ms = 3;
+  uint32 probe_timeout_ms = 4;
+}
+
+message ProbeResults {
+  uint64 batch_id = 1;
+  bytes source_client_id = 2; // 32 bytes pubkey
+  repeated PeerProbeResults peers = 3;
+}
+
+message PeerProbeResults {
+  bytes dst_client_id = 1; // 32 bytes pubkey
+  repeated AFProbeResult af_results = 2;
+}
+
+message AFProbeResult {
+  string af_name = 1;
+  double latency_mean_ms = 2; // INF if unreachable
+  double latency_std_ms = 3;
+  double packet_loss = 4;     // 0..1
+  int32 priority = 5;
+}
+
+message ControllerState {
+  bytes controller_id = 1; // 32 bytes pubkey
+
+  uint32 client_count = 2;
+  int64 last_client_change_unix_ns = 3;
+
+  repeated ClientInfo clients = 4;
+  repeated LatencyRow latency_matrix = 5;
+  repeated RouteRow route_matrix = 6;
+  repeated RouteTableEntry route_table = 7;
+}
+
+message ClientInfo {
+  bytes client_id = 1; // 32 bytes pubkey
+  repeated ClientEndpoint endpoints = 2;
+  int64 last_seen_unix_ns = 3;
+  double additional_cost = 4;
+}
+
+message ClientEndpoint {
+  string af_name = 1;
+  bytes ip = 2; // 4 or 16 bytes
+  uint32 probe_port = 3;
+  uint32 communication_port = 4; // from TCP remote port
+  uint32 vxlan_dstport = 5;
+  int32 priority = 6;
+}
+
+message LatencyRow {
+  bytes src_client_id = 1;
+  repeated SelectedLatency entries = 2;
+}
+
+message SelectedLatency {
+  bytes dst_client_id = 1;
+  string af_name = 2;
+  double latency_ms = 3;
+}
+
+message RouteRow {
+  bytes src_client_id = 1;
+  repeated RouteEntry entries = 2;
+}
+
+message RouteEntry {
+  bytes dst_client_id = 1;
+  bytes nexthop_client_id = 2; // 32 bytes, empty if unreachable
+  string af_name = 3;          // src->nexthop AF
+}
+
+message RouteTableEntry {
+  bytes mac = 1; // 6 bytes
+  bytes ip = 2;  // 0 bytes ok
+  repeated RouteOwner owners = 3;
+}
+
+message RouteOwner {
+  bytes client_id = 1;
+  int64 expire_unix_ns = 2;
+}
+
+message ControllerStateUpdate {
+  // For simplicity, treat as full replacement (production: could be delta).
+  bool full_replace = 1;
+  ControllerState state = 2;
+}
+
+message MulticastForward {
+  bytes source_client_id = 1; // 32 bytes pubkey (for sanity / debug)
+  bytes frame = 2;            // raw ethernet frame
+}
+
+message MulticastDeliver {
+  bytes source_client_id = 1; // original source
+  bytes frame = 2;
+}
+
+message ProbeRequest {
+  uint64 batch_id = 1;
+  uint32 seq = 2; // 0..probe_times-1
+  uint64 probe_id = 3; // unique id per probe packet
+  bytes source_client_id = 4; // 32 bytes pubkey
+  int64 src_timestamp_unix_ns = 5;
+}
+
+message ProbeResponse {
+  uint64 batch_id = 1;
+  uint32 seq = 2;
+  uint64 probe_id = 3;
+  bytes source_client_id = 4; // requester
+  int64 dst_timestamp_unix_ns = 5;
+}
