@@ -24,6 +24,7 @@ type ControllerState struct {
 // ClientInfo is maintained for each connected client.
 type ClientInfo struct {
 	ClientID       types.ClientID
+	ClientName     string
 	Endpoints      map[types.AFName]*types.Endpoint
 	LastSeen       time.Time
 	Routes         []types.Type2Route
@@ -101,6 +102,7 @@ func addrToBytes(a netip.Addr) []byte {
 func clientInfoToProto(ci *ClientInfo) *pb.ClientInfoProto {
 	p := &pb.ClientInfoProto{
 		ClientId:       ci.ClientID[:],
+		ClientName:     ci.ClientName,
 		Endpoints:      make(map[string]*pb.EndpointProto),
 		LastSeen:       ci.LastSeen.UnixNano(),
 		AdditionalCost: ci.AdditionalCost,
@@ -165,6 +167,7 @@ func routeTableToProto(rt []*types.RouteTableEntry) []*pb.RouteTableEntryProto {
 
 func ProtoToClientInfo(p *pb.ClientInfoProto) *ClientInfo {
 	ci := &ClientInfo{
+		ClientName:     p.ClientName,
 		Endpoints:      make(map[types.AFName]*types.Endpoint),
 		LastSeen:       time.Unix(0, p.LastSeen),
 		AdditionalCost: p.AdditionalCost,

@@ -18,10 +18,8 @@ import (
 
 // neighborWatchLoop monitors netlink neighbor events and sends incremental updates.
 func (c *Client) neighborWatchLoop() {
-	// Initial full dump
-	c.dumpLocalState()
-
-	// Subscribe to neighbor events
+	// Subscribe FIRST, then dump — so no events are lost between dump and subscribe.
+	// Duplicate events from the overlap are harmless (addLocalRoute is idempotent).
 	neighCh := make(chan netlink.NeighUpdate)
 	done := make(chan struct{})
 	defer close(done)
@@ -30,6 +28,9 @@ func (c *Client) neighborWatchLoop() {
 		log.Printf("[Client] netlink neighbor subscribe error: %v", err)
 		return
 	}
+
+	// Initial full dump (events arriving during dump queue in neighCh)
+	c.dumpLocalState()
 
 	for {
 		select {

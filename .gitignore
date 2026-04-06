@@ -9,6 +9,7 @@ keygen
 test.sh
 tests/*.log
 /tmp/
+/out/*
 
 # IDE
 .idea/

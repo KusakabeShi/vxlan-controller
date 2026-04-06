@@ -331,6 +331,7 @@ type ClientInfoProto struct {
 	LastSeen       int64                     `protobuf:"varint,3,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	Routes         []*Type2Route             `protobuf:"bytes,4,rep,name=routes,proto3" json:"routes,omitempty"`
 	AdditionalCost float64                   `protobuf:"fixed64,5,opt,name=additional_cost,json=additionalCost,proto3" json:"additional_cost,omitempty"`
+	ClientName     string                    `protobuf:"bytes,6,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -398,6 +399,13 @@ func (x *ClientInfoProto) GetAdditionalCost() float64 {
 		return x.AdditionalCost
 	}
 	return 0
+}
+
+func (x *ClientInfoProto) GetClientName() string {
+	if x != nil {
+		return x.ClientName
+	}
+	return ""
 }
 
 type EndpointProto struct {
@@ -1522,13 +1530,15 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\rcontroller_id\x18\x06 \x01(\fR\fcontrollerId\x1a\\\n" +
 	"\fClientsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x126\n" +
-	"\x05value\x18\x02 \x01(\v2 .vxlancontroller.ClientInfoProtoR\x05value:\x028\x01\"\xd6\x02\n" +
+	"\x05value\x18\x02 \x01(\v2 .vxlancontroller.ClientInfoProtoR\x05value:\x028\x01\"\xf7\x02\n" +
 	"\x0fClientInfoProto\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\fR\bclientId\x12M\n" +
 	"\tendpoints\x18\x02 \x03(\v2/.vxlancontroller.ClientInfoProto.EndpointsEntryR\tendpoints\x12\x1b\n" +
 	"\tlast_seen\x18\x03 \x01(\x03R\blastSeen\x123\n" +
 	"\x06routes\x18\x04 \x03(\v2\x1b.vxlancontroller.Type2RouteR\x06routes\x12'\n" +
-	"\x0fadditional_cost\x18\x05 \x01(\x01R\x0eadditionalCost\x1a\\\n" +
+	"\x0fadditional_cost\x18\x05 \x01(\x01R\x0eadditionalCost\x12\x1f\n" +
+	"\vclient_name\x18\x06 \x01(\tR\n" +
+	"clientName\x1a\\\n" +
 	"\x0eEndpointsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x124\n" +
 	"\x05value\x18\x02 \x01(\v2\x1e.vxlancontroller.EndpointProtoR\x05value:\x028\x01\"d\n" +

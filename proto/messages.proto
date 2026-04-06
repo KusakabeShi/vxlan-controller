@@ -43,6 +43,7 @@ message ClientInfoProto {
   int64 last_seen = 3;
   repeated Type2Route routes = 4;
   double additional_cost = 5;
+  string client_name = 6;
 }
 
 message EndpointProto {

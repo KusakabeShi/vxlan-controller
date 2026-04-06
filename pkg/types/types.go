@@ -47,6 +47,7 @@ type PerClientConfig struct {
 // ClientInfo is maintained by the Controller for each connected Client.
 type ClientInfo struct {
 	ClientID       ClientID
+	ClientName     string
 	Endpoints      map[AFName]*Endpoint
 	LastSeen       time.Time
 	Routes         []Type2Route

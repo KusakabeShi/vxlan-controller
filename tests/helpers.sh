@@ -242,8 +242,6 @@ private_key: "${privkey}"
 bridge_name: "${BRIDGE_NAME}"
 clamp_mss_to_mtu: false
 neigh_suppress: ${neigh_suppress}
-fdb_debounce_ms: 200
-fdb_debounce_max_ms: 1000
 init_timeout: ${INIT_TIMEOUT}
 ntp_servers: []
 address_families:

@@ -115,6 +115,7 @@ type ControllerView struct {
 // ClientInfoView is the Client's view of a ClientInfo from the Controller.
 type ClientInfoView struct {
 	ClientID       types.ClientID
+	ClientName     string
 	Endpoints      map[types.AFName]*types.Endpoint
 	LastSeen       time.Time
 	Routes         []types.Type2Route
@@ -532,6 +533,7 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 
 		msgType, payload, _, err := protocol.ReadUDPPacket(data, sm.FindByIndex)
 		if err != nil {
+			log.Printf("[Client] commUDP ReadUDPPacket error: %v (len=%d)", err, n)
 			continue
 		}
 
@@ -542,10 +544,13 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 				continue
 			}
 
+			log.Printf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
+
 			// Inject into tap
 			select {
 			case c.tapInjectCh <- deliver.Payload:
 			default:
+				log.Printf("[Client] tapInjectCh full, dropping frame")
 			}
 		}
 	}
@@ -715,6 +720,7 @@ func (c *Client) getVxlanDstPort(af types.AFName) uint16 {
 
 func protoToClientInfoView(p *pb.ClientInfoProto) *ClientInfoView {
 	civ := &ClientInfoView{
+		ClientName:     p.ClientName,
 		Endpoints:      make(map[types.AFName]*types.Endpoint),
 		LastSeen:       time.Unix(0, p.LastSeen),
 		AdditionalCost: p.AdditionalCost,

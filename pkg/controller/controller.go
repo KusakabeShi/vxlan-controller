@@ -276,10 +276,11 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 			ClientID:  clientID,
 			Endpoints: make(map[types.AFName]*types.Endpoint),
 		}
-		// Look up AdditionalCost from config
+		// Look up AdditionalCost and ClientName from config
 		for _, pc := range c.Config.AllowedClients {
 			if pc.ClientID == clientID {
 				ci.AdditionalCost = pc.AdditionalCost
+				ci.ClientName = pc.ClientName
 				break
 			}
 		}
@@ -641,6 +642,18 @@ func (c *Controller) triggerTopologyUpdate() {
 
 	log.Printf("[Controller] topology update: RouteMatrix recomputed (%d clients, %d latency sources)", len(c.State.Clients), len(c.State.LatencyMatrix))
 
+	// Log LatencyMatrix and RouteMatrix for debugging
+	for src, dsts := range c.State.LatencyMatrix {
+		for dst, sl := range dsts {
+			log.Printf("[Controller] LatencyMatrix: %s -> %s: lat=%.2f af=%s", src.Hex()[:8], dst.Hex()[:8], sl.Latency, sl.AF)
+		}
+	}
+	for src, dsts := range newRM {
+		for dst, re := range dsts {
+			log.Printf("[Controller] RouteMatrix: %s -> %s: nextHop=%s af=%s", src.Hex()[:8], dst.Hex()[:8], re.NextHop.Hex()[:8], re.AF)
+		}
+	}
+
 	// Push full RouteMatrix update
 	c.pushDelta(&pb.ControllerStateUpdate{
 		Update: &pb.ControllerStateUpdate_RouteMatrixUpdate{
@@ -918,11 +931,15 @@ func (c *Controller) udpReadLoop(al *AFListener) {
 
 		msgType, payload, peerID, err := protocol.ReadUDPPacket(data, al.UDPSessions.FindByIndex)
 		if err != nil {
+			log.Printf("[Controller] UDP ReadUDPPacket error on %s from %s: %v (len=%d, first_byte=0x%02x)", al.AF, remoteAddr, err, n, data[0])
 			continue
 		}
 
 		if msgType == protocol.MsgMulticastForward {
+			log.Printf("[Controller] received MsgMulticastForward on %s from %s (%d bytes payload)", al.AF, remoteAddr, len(payload))
 			c.handleMulticastForward(al, peerID, payload, remoteAddr)
+		} else {
+			log.Printf("[Controller] UDP msg type=0x%02x on %s from %s", byte(msgType), al.AF, remoteAddr)
 		}
 	}
 }
@@ -967,6 +984,7 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 	defer c.mu.Unlock()
 
 	srcID := types.ClientID(sourceClientID)
+	deliveredTo := 0
 
 	// Send on ALL AF listeners, not just the one that received the forward
 	for _, listener := range c.afListeners {
@@ -989,9 +1007,14 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 				continue
 			}
 
-			protocol.WriteUDPPacket(listener.UDPConn, addr, session, protocol.MsgMulticastDeliver, deliverData)
+			if err := protocol.WriteUDPPacket(listener.UDPConn, addr, session, protocol.MsgMulticastDeliver, deliverData); err != nil {
+				log.Printf("[Controller] multicast deliver to %s via %s error: %v", clientID.Hex()[:8], listener.AF, err)
+			} else {
+				deliveredTo++
+			}
 		}
 	}
+	log.Printf("[Controller] multicast from %s: delivered to %d clients", srcID.Hex()[:8], deliveredTo)
 }
 
 // addRoute adds a route, replacing any existing route with the same MAC.
