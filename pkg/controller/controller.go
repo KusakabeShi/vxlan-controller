@@ -732,8 +732,11 @@ func (c *Controller) clientSendLoop(cc *ClientConn) {
 		afc := cc.AFConns[cc.ActiveAF]
 
 		// If not synced, overwrite State with full state (filtered for this client)
+		// and mark Synced immediately so subsequent pushDelta calls will queue
+		// deltas behind this full state rather than skipping this client.
 		if !cc.Synced {
 			item.State = c.getFullStateEncodedForClient(cc)
+			cc.Synced = true
 		}
 
 		c.mu.Unlock()
@@ -750,11 +753,6 @@ func (c *Controller) clientSendLoop(cc *ClientConn) {
 				}
 				vlog.Errorf("[Controller] send error to %s: %v", cc.ClientID.Hex()[:8], err)
 				continue
-			}
-			if msgType == protocol.MsgControllerState {
-				c.mu.Lock()
-				cc.Synced = true
-				c.mu.Unlock()
 			}
 		}
 
