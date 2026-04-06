@@ -106,19 +106,21 @@ setup_topology() {
     ip link add br-lan-v6 type bridge
     ip link set br-lan-v6 up
 
-    # v4 LAN: nodes 1,2,3,4,10 (asymmetric delays)
-    connect_to_lan 1  v4 "${V4_SUBNET}.1/24"  5
-    connect_to_lan 2  v4 "${V4_SUBNET}.2/24"  5
-    connect_to_lan 3  v4 "${V4_SUBNET}.3/24"  2
-    connect_to_lan 4  v4 "${V4_SUBNET}.4/24"  3
-    connect_to_lan 10 v4 "${V4_SUBNET}.10/24" 1
+    # v4 LAN: nodes 1,2,3,4,10 (no per-interface delay; per-dst delays below)
+    connect_to_lan 1  v4 "${V4_SUBNET}.1/24"
+    connect_to_lan 2  v4 "${V4_SUBNET}.2/24"
+    connect_to_lan 3  v4 "${V4_SUBNET}.3/24"
+    connect_to_lan 4  v4 "${V4_SUBNET}.4/24"
+    connect_to_lan 10 v4 "${V4_SUBNET}.10/24"
 
     # v6 LAN: nodes 3,4,10,5,6
-    connect_to_lan 3  v6 "${V6_PREFIX}3/64"  2
-    connect_to_lan 4  v6 "${V6_PREFIX}4/64"  3
-    connect_to_lan 10 v6 "${V6_PREFIX}10/64" 1
-    connect_to_lan 5  v6 "${V6_PREFIX}5/64"  5
-    connect_to_lan 6  v6 "${V6_PREFIX}6/64"  5
+    connect_to_lan 3  v6 "${V6_PREFIX}3/64"
+    connect_to_lan 4  v6 "${V6_PREFIX}4/64"
+    connect_to_lan 10 v6 "${V6_PREFIX}10/64"
+    connect_to_lan 5  v6 "${V6_PREFIX}5/64"
+    connect_to_lan 6  v6 "${V6_PREFIX}6/64"
+
+    setup_delays
 
     echo "=== Setting up leaf connections ==="
     for i in 1 2 3 4 5 6; do
@@ -150,6 +152,73 @@ setup_topology() {
     ip netns exec node-1 ping -c 1 -W 2 ${V4_SUBNET}.2 > /dev/null 2>&1 && echo "  v4: 1->2 OK" || echo "  v4: 1->2 FAIL"
     ip netns exec node-3 ping -c 1 -W 2 ${V4_SUBNET}.4 > /dev/null 2>&1 && echo "  v4: 3->4 OK" || echo "  v4: 3->4 FAIL"
     ip netns exec node-5 ping6 -c 1 -W 2 ${V6_PREFIX}6 > /dev/null 2>&1 && echo "  v6: 5->6 OK" || echo "  v6: 5->6 FAIL"
+}
+
+# =========================================
+# Per-destination delay setup
+# =========================================
+# Creates per-dst netem delays using tc prio qdisc + u32 filters.
+# This allows different latencies to different peers on the same interface,
+# breaking the star-topology triangle inequality so same-stack transit can occur.
+#
+# Design:
+#   node-1 ↔ node-2 (v4): 30ms (slow direct → forces transit via node-3/4)
+#   node-5 ↔ node-6 (v6): 30ms (slow direct → forces transit via node-3/4)
+#   node-3 (dual-stack):   1ms to all (best transit node)
+#   node-4 (dual-stack):   2ms to all (backup transit node)
+#   everything else:       1ms
+#
+# With AdditionalCost=20:
+#   1→2 direct:  30 + 20 = 50
+#   1→3→2:       (1+20) + (1+20) = 42  ← transit wins by 8ms margin
+#   1→4→2:       (2+20) + (2+20) = 44  ← also beats direct
+
+setup_delays() {
+    echo "=== Setting up per-destination delays ==="
+
+    # node-1 (v4 only): 30ms to node-2, 1ms to rest
+    set_per_dst_delay 1 v4 ip "${V4_SUBNET}.2/32" 30 1
+
+    # node-2 (v4 only): 30ms to node-1, 1ms to rest
+    set_per_dst_delay 2 v4 ip "${V4_SUBNET}.1/32" 30 1
+
+    # node-3 (dual-stack): 1ms uniform
+    ip netns exec "node-3" tc qdisc add dev eth-v4 root netem delay 1ms
+    ip netns exec "node-3" tc qdisc add dev eth-v6 root netem delay 1ms
+
+    # node-4 (dual-stack): 2ms uniform (slightly worse than node-3)
+    ip netns exec "node-4" tc qdisc add dev eth-v4 root netem delay 2ms
+    ip netns exec "node-4" tc qdisc add dev eth-v6 root netem delay 2ms
+
+    # node-5 (v6 only): 30ms to node-6, 1ms to rest
+    set_per_dst_delay 5 v6 ip6 "${V6_PREFIX}6/128" 30 1
+
+    # node-6 (v6 only): 30ms to node-5, 1ms to rest
+    set_per_dst_delay 6 v6 ip6 "${V6_PREFIX}5/128" 30 1
+
+    # node-10 (controller only): 1ms uniform
+    ip netns exec "node-10" tc qdisc add dev eth-v4 root netem delay 1ms
+    ip netns exec "node-10" tc qdisc add dev eth-v6 root netem delay 1ms
+}
+
+# set_per_dst_delay NODE AF_NAME PROTO DST_CIDR SLOW_MS DEFAULT_MS
+#   AF_NAME: v4 or v6 (determines device name eth-v4 / eth-v6)
+#   PROTO:   ip or ip6 (for tc filter protocol + match)
+#   DST_CIDR: e.g. "192.168.47.2/32" or "fd87:4789::6/128"
+set_per_dst_delay() {
+    local node=$1 af=$2 proto=$3 dst=$4 slow_ms=$5 default_ms=$6
+    local dev="eth-${af}"
+    local ns="node-$node"
+    local tc_proto="ip"
+    [ "$proto" = "ip6" ] && tc_proto="ipv6"
+
+    ip netns exec "$ns" tc qdisc add dev "$dev" root handle 1: prio bands 3 \
+        priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+    ip netns exec "$ns" tc qdisc add dev "$dev" parent 1:1 handle 10: netem delay "${default_ms}ms"
+    ip netns exec "$ns" tc qdisc add dev "$dev" parent 1:2 handle 20: netem delay "${slow_ms}ms"
+    ip netns exec "$ns" tc qdisc add dev "$dev" parent 1:3 handle 30: netem delay "${default_ms}ms"
+    ip netns exec "$ns" tc filter add dev "$dev" parent 1:0 protocol "$tc_proto" prio 1 \
+        u32 match "$proto" dst "$dst" flowid 1:2
 }
 
 connect_to_lan() {
