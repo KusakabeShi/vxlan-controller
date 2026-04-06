@@ -2,8 +2,8 @@
 vxlan-controller
 vxlan-client
 keygen
-controller
-client
+/controller
+/client
 
 # Test artifacts
 test.sh
