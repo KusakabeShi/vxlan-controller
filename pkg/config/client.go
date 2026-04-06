@@ -18,8 +18,6 @@ type ClientConfigFile struct {
 	ClampMSSToMTU     bool                            `yaml:"clamp_mss_to_mtu"`
 	NeighSuppress     bool                            `yaml:"neigh_suppress"`
 	AFSettings        map[string]*ClientAFConfigFile   `yaml:"address_families"`
-	FDBDebounceMs     int                             `yaml:"fdb_debounce_ms"`
-	FDBDebounceMaxMs  int                             `yaml:"fdb_debounce_max_ms"`
 	InitTimeout       int                             `yaml:"init_timeout"`
 	NTPServers        []string                        `yaml:"ntp_servers"`
 	NTPPeriodH        int                             `yaml:"ntp_period_h"`
@@ -52,8 +50,6 @@ type ClientConfig struct {
 	ClampMSSToMTU    bool
 	NeighSuppress    bool
 	AFSettings       map[types.AFName]*ClientAFConfig
-	FDBDebounceMs    int
-	FDBDebounceMaxMs int
 	InitTimeout      time.Duration
 	NTPServers       []string
 	NTPPeriod        time.Duration
@@ -102,8 +98,6 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		ClampMSSToMTU:    raw.ClampMSSToMTU,
 		NeighSuppress:    raw.NeighSuppress,
 		NTPServers:       raw.NTPServers,
-		FDBDebounceMs:    raw.FDBDebounceMs,
-		FDBDebounceMaxMs: raw.FDBDebounceMaxMs,
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
 	}

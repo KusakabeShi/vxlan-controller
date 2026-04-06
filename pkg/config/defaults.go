@@ -24,8 +24,6 @@ var DefaultClientConfig = ClientConfigFile{
 	BridgeName:       "br-vxlan",
 	ClampMSSToMTU:    false,
 	NeighSuppress:    false,
-	FDBDebounceMs:    500,
-	FDBDebounceMaxMs: 3000,
 	InitTimeout:      10,
 	NTPServers:       DefaultNTPServers,
 	NTPPeriodH:       23,

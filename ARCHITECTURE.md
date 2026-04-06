@@ -362,8 +362,6 @@ type ClientConfig struct {
     ClampMSSToMTU     bool
     NeighSuppress     bool              // 是否在 vxlan device 和 tap-inject 上啟用 neigh_suppress
     AFSettings        map[AFName]*ClientAFConfig
-    FDBDebounceMs     int               // 預設 500
-    FDBDebounceMaxMs  int               // 預設 3000
     InitTimeout       time.Duration     // 預設 10s
     NTPServers        []string
 }
@@ -421,10 +419,6 @@ type Client struct {
     // === NTP ===
     TimeOffset    time.Duration         // 本地時鐘與 NTP 的偏差
 
-    // === Debounce ===
-    fdbDebounceTimer    *time.Timer
-    fdbDebounceMaxTimer *time.Timer
-    fdbPendingChanges   []neighChange
 }
 
 // ControllerConn 代表 Client 與單一 Controller 的連線狀態（client_com）
@@ -498,7 +492,7 @@ main goroutine
 | `tcpConnLoop` | C*A (每個 Controller 的每個 AF) | 建立 TCP → Noise IK handshake → 發送 ClientRegister → 啟動 `tcpRecvLoop`。斷線後指數退避重連（1s→2s→...→30s），連線存活超過 10s 時重設退避 |
 | `tcpRecvLoop` | C*A | 讀取 TCP 訊息（ControllerState / ControllerStateUpdate），更新 `ControllerView`。收到全量更新時切換 `ActiveAF` |
 | `probeListenLoop` | A (每個 AF) | 監聽 probe UDP port，收到 ProbeRequest 解析 payload 取出 probe_id + src_timestamp，回覆 ProbeResponse{probe_id, dst_timestamp, src_timestamp}。收到 ProbeResponse 按 probe_id 路由到對應批次收集器 |
-| `neighborWatchLoop` | 1 | 透過 netlink 訂閱 `RTM_NEWNEIGH` / `RTM_DELNEIGH`，debounce 後上報所有 Controller |
+| `neighborWatchLoop` | 1 | 透過 netlink 訂閱 `RTM_NEWNEIGH` / `RTM_DELNEIGH`，每個事件即時發送增量更新給所有 Controller（無 debounce） |
 | `tapReadLoop` | 1 | 從 `TapFD` 讀取 broadcast 封包 → rate limit → 透過 active AF 的 UDP 上傳 Controller (MulticastForward) |
 | `tapWriteLoop` | 1 | 從 channel 取出 Controller relay 來的 broadcast 封包 → 寫入 `TapFD` 注入 bridge |
 | `fdbReconcileLoop` | 1 | 監聽 `RouteMatrix` 或 `RouteTable` 變更通知 (channel) → 重新計算 FDB → diff 寫入 kernel (`netlink`) |
@@ -753,17 +747,17 @@ Client A          Controller           Client B, C, D...
 
 ## 7. Debounce 機制
 
-### 7.1 Client: 鄰居表變更 (fdb_debounce)
+### 7.1 Client: 鄰居表變更（無 debounce，即時增量）
 
-```go
-// neighborWatchLoop 中:
-// 收到 netlink 事件 → 累積到 pendingChanges
-// 重設 debounceTimer (fdb_debounce_ms)
-// 若 debounceMaxTimer (fdb_debounce_max_ms) 未啟動則啟動
-//
-// debounceTimer 到期 或 debounceMaxTimer 到期:
-//   flush pendingChanges → 上報所有 Controller
-//   重設兩個 timer
+```
+neighborWatchLoop:
+  1. 啟動時 dump 全量 → reportMACs(full=true) 給所有 Controller
+  2. subscribe netlink 事件
+  3. 每個 RTM_NEWNEIGH/RTM_DELNEIGH:
+     - 判斷 add 或 delete（RTM_DELNEIGH 或 NUD 狀態不可用 → delete）
+     - 更新本地 LocalMACs
+     - 發送 MACUpdate{is_full=false, routes=[{mac, ip, is_delete}]} 給所有 Controller
+  不使用 debounce：單條增量成本極低，TCP Nagle 自然合併
 ```
 
 ### 7.2 Controller: 新 Client (sync_new_client_debounce)

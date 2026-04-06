@@ -181,8 +181,9 @@ func (x *MACUpdate) GetIsFull() bool {
 
 type Type2Route struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mac           []byte                 `protobuf:"bytes,1,opt,name=mac,proto3" json:"mac,omitempty"` // 6 bytes
-	Ip            []byte                 `protobuf:"bytes,2,opt,name=ip,proto3" json:"ip,omitempty"`   // 4 or 16 bytes
+	Mac           []byte                 `protobuf:"bytes,1,opt,name=mac,proto3" json:"mac,omitempty"`                            // 6 bytes
+	Ip            []byte                 `protobuf:"bytes,2,opt,name=ip,proto3" json:"ip,omitempty"`                              // 4 or 16 bytes
+	IsDelete      bool                   `protobuf:"varint,3,opt,name=is_delete,json=isDelete,proto3" json:"is_delete,omitempty"` // true = withdraw, false = advertise (only meaningful when MACUpdate.is_full=false)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -229,6 +230,13 @@ func (x *Type2Route) GetIp() []byte {
 		return x.Ip
 	}
 	return nil
+}
+
+func (x *Type2Route) GetIsDelete() bool {
+	if x != nil {
+		return x.IsDelete
+	}
+	return false
 }
 
 // Controller → Client: full state
@@ -1498,11 +1506,12 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\x0evxlan_dst_port\x18\x02 \x01(\rR\fvxlanDstPort\"Y\n" +
 	"\tMACUpdate\x123\n" +
 	"\x06routes\x18\x01 \x03(\v2\x1b.vxlancontroller.Type2RouteR\x06routes\x12\x17\n" +
-	"\ais_full\x18\x02 \x01(\bR\x06isFull\".\n" +
+	"\ais_full\x18\x02 \x01(\bR\x06isFull\"K\n" +
 	"\n" +
 	"Type2Route\x12\x10\n" +
 	"\x03mac\x18\x01 \x01(\fR\x03mac\x12\x0e\n" +
-	"\x02ip\x18\x02 \x01(\fR\x02ip\"\xcf\x03\n" +
+	"\x02ip\x18\x02 \x01(\fR\x02ip\x12\x1b\n" +
+	"\tis_delete\x18\x03 \x01(\bR\bisDelete\"\xcf\x03\n" +
 	"\x0fControllerState\x12!\n" +
 	"\fclient_count\x18\x01 \x01(\rR\vclientCount\x12?\n" +
 	"\x1clast_client_change_timestamp\x18\x02 \x01(\x03R\x19lastClientChangeTimestamp\x12G\n" +

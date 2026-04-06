@@ -89,8 +89,6 @@ Client 配置(client.conf）:
 * 其中 local bind addr 允許動態變換(對應浮動IP的情況)
     * 暴露 API 讀寫。搭配一個 syncer ，讀取網卡 IP 變化，對比，更新到 client 裡面
     * 有人呼叫更新時，新建 socket 綁定新 IP,通訊切過去,釋放舊 socket
-* fdb_debounce_ms: 本地 FDB/鄰居變更事件的 debounce 靜默期（預設值：500）。當偵測到 MAC/鄰居變更後，等待此時間內無新變更才觸發上報給 Controller
-* fdb_debounce_max_ms: debounce 的最大等待時間（預設值：3000）。從第一次變更算起，即使持續有新變更，超過此時間也會強制 flush 上報，避免持續變更導致遲遲不發送
 * init_timeout：初始化模式下等待的時間（以秒為單位），之後才會選擇權威控制器，並編寫 FDB 條目（預設值：10）。這允許所有控制器穩定運行client_count，last_client_change_timestamp 之後客戶端才會提交權威選擇。
 * ntp_servers[]: NTP server 列表，校準本機時間的誤差
 
@@ -368,10 +366,9 @@ Controller 配置:
 14. Client 透過 **netlink** 讀取並持續監聽本地的兩類資訊，上報給所有 Controller（步驟 6 已開始監聯，這裡是持續的過程）：
     * **鄰居表（neighbor table）**: 讀取 (mac, ip addr) 組合，用於 Controller 建立 RouteTable，也供 `neigh_suppress` 代答 ARP/NS
     * **FDB（forwarding database）**: 讀取 bridge 上本地 port 自學習到的 (mac, nil)（無 dst，代表本地 MAC），用於告知 Controller 哪些 MAC 在本 Client 上
-    * 兩者皆透過 netlink 實現：啟動時先 **dump** 全量，之後持續 **subscribe** 變更事件（RTM_NEWNEIGH / RTM_DELNEIGH）
-    * **Debounce 機制**：偵測到變更後不立即上報，而是等待 `fdb_debounce_ms`（預設 500ms）靜默期內無新變更才觸發上報，將多筆變更打包成一次發送
-    * **Debounce 上限**：`fdb_debounce_max_ms`（預設 3000ms）從第一次變更算起，即使持續有新變更，超過此時間也強制 flush 上報，避免被無限推遲
-    * 兩個 debounce 參數皆可在 Client 配置檔中調整
+    * 兩者皆透過 netlink 實現：啟動時先 **dump** 全量（`MACUpdate.is_full=true`），之後持續 **subscribe** 變更事件（RTM_NEWNEIGH / RTM_DELNEIGH），每個事件即時發送增量更新（`MACUpdate.is_full=false`）
+    * **增量更新格式**（仿 BGP UPDATE）：每條 `Type2Route` 自帶 `is_delete` 標記。`is_delete=false` 為宣告（add），`is_delete=true` 為撤回（withdraw）。一個 `MACUpdate` 可同時包含 add 和 delete
+    * 不使用 debounce：單條 MAC 增量更新成本極低（幾十 bytes），TCP Nagle 會自然合併短時間內的多筆小訊息
 15. Controller 收到更新，同步到 Controller 的 RouteTable
     * RouteTable: 由以下三元組構成
         * mac

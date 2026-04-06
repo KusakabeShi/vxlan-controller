@@ -24,6 +24,7 @@ message MACUpdate {
 message Type2Route {
   bytes mac = 1; // 6 bytes
   bytes ip = 2;  // 4 or 16 bytes
+  bool is_delete = 3; // true = withdraw, false = advertise (only meaningful when MACUpdate.is_full=false)
 }
 
 // Controller → Client: full state
