@@ -391,46 +391,176 @@ Controller 配置:
 
 使用 Mutex + Per-Client 發送佇列，不引入 sequence number 或 per-client view state。
 
-## Controller 端資料結構
+## 解偶架構
 
-* **ControllerState**: Controller 的全域狀態（ClientInfo、RouteMatrix、RouteTable 等），受一把 Mutex 保護
-    * 任何時刻只有一個操作能持有鎖：state mutation、全量推送準備、增量推送準備
-* **Per-Client 發送佇列**: 每個已連線 Client 持有一個帶 buffer 的發送佇列（send queue）
-    * 所有推送給 Client 的訊息（全量或增量）先推入佇列
-    * 由獨立的 per-client 發送 goroutine 從佇列取出，透過 TCP 照順序發送
-    * 鎖只在「修改 state + 推訊息進佇列」期間持有，不涉及網路 I/O，持鎖時間為微秒級
-* **synced 旗標**: 每個 Client 連線維護一個 `synced` 旗標，標記該 Client 是否已完成全量同步
+Controller 和 Client 各自的狀態管理與通訊通道完全解偶：
 
-## State Mutation（收到 client 上報、probe results 等）
+```
+Client 端:
+  client_state          ←→  client_com (per controller)  ←→ 網路 ←→  controller_com (per client)  ←→  controller_state
+  (本地 MAC/neigh)           (多 AF TCP 連線管理)                      (多 AF TCP 連線管理)              (全域路由狀態)
 
-1. 取得鎖
-2. 修改 ControllerState
+Controller 端:
+  controller_state      ←→  controller_com (per client)  ←→ 網路 ←→  client_com (per controller)  ←→  client_side_controller_state
+  (全域路由狀態)              (多 AF TCP 連線管理)                      (多 AF TCP 連線管理)              (Controller 推送的狀態視圖)
+```
+
+### client_state（Client 端本地狀態）
+
+* 保存本地 MAC、鄰居表等，指向本地路由表
+* 持有一把 RWLock
+* `Write(inc_update)`: WLock → 同步增量到本地狀態 → 推入所有 controller 的 client_com.sendqueue → WUnlock
+* `GetFullState()`: RLock → 複製狀態返回 → RUnlock
+
+### client_com（Client 端通訊通道，per controller）
+
+* 每個 controller 各有一個實例，內部管理多個 AF 連線
+* 每個 AF 斷線後自動重連
+* 內部變數：
+    * `activeAF`: 當前接收訊息使用的 AF。**由 controller 決定**：當某個 AF 收到 controller 的合法全量更新時，`activeAF` = 該 AF
+    * `synced`: 代表發送方向是否已進入增量模式。發送全量更新給 controller 後變為 true
+* `activeAF` 和 `synced` 的語義差異：
+    * `activeAF != nil`: 該 AF 已收到 controller 全量更新，可用於接收訊息
+    * `synced == true`: 已發送本地全量狀態給 controller，後續可只發增量
+* 斷線處理：若斷線的 AF 是 activeAF → `activeAF = nil` + `synced = false`
+
+### controller_com（Controller 端通訊通道，per client）
+
+* 每個 client 各有一個實例，內部管理多個 AF 連線
+* 內部變數同 client_com（`activeAF`、`synced`）
+* 斷線處理：
+    * 非 activeAF 斷線 → 清空該 AF handle，無其他影響
+    * activeAF 斷線 → `synced = false` + `activeAF = nil`
+* 新連線處理（通過驗證後）：
+    * 對應 AF handle 為 nil → 直接設定
+    * 對應 AF handle 不為 nil → 關閉舊連線觸發斷線清理，再替換
+
+### client_side_controller_state（Client 端的 Controller 狀態視圖）
+
+* 每個 controller 各一份，只使用權威控制器的結果
+* 持有自己的 RWLock
+* `Write()` 更新後，若是權威控制器 → 觸發 FDB reconcile（非阻塞 channel 通知，FDB reconcile goroutine 異步執行）
+
+### controller_state（Controller 端全域狀態）
+
+* 保存所有 client 的路由表、endpoint、RouteMatrix 等
+* 持有一把 RWLock
+* `Write(inc_update)`: WLock → 同步增量到狀態 → 推入所有 client 的 controller_com.sendqueue → WUnlock
+* `GetFullState()`: RLock → 複製狀態返回 → RUnlock
+
+## 增量更新策略
+
+### 增量 vs 全量（仿 BGP 模型）
+
+類似 BGP/EVPN 的增量同步模型：
+* **Session 內**: TCP 保證順序和完整性，增量更新可靠傳遞
+* **Session 重建時**: drain 佇列 + 重發全量（類似 BGP session reset 時的 full table dump）
+* **所有操作必須冪等**: MAC add 重複無害，MAC delete 不存在 = no-op。這是增量同步正確性的基礎
+
+### 全量後殘留增量
+
+Session 重建時，drain 佇列後 sendloop 發全量。但全量發送與新增量入隊之間有時序窗口，可能導致少量增量重複發送：
+
+```
+T1: drain queue, synced=false
+T2: write(inc1) → queue: [inc1], state 包含 inc1
+T3: write(inc2) → queue: [inc1, inc2], state 包含 inc1+inc2
+T4: sendloop dequeue inc1, synced=false → getFullState() 包含 inc1+inc2 → 發全量
+T5: synced=true
+T6: sendloop dequeue inc2, synced=true → 發 inc2（重複，已在全量中）
+```
+
+因為所有操作冪等，重複無害。這是 BGP 數十年運行驗證過的模型。
+
+### sendloop 的 AF 選擇
+
+Controller 端和 Client 端的 sendloop 在 `activeAF == nil` 時行為不同：
+
+* **Controller 端 sendloop**：`activeAF == nil` 時，直接選擇存活最久的 AF 並寫入 `activeAF`。Controller 是決策方，選好就定：
+    ```
+    if activeAF == nil:
+        activeAF = pickSurvivor()
+        if activeAF == nil: discard; continue
+    ```
+* **Client 端 sendloop**：`activeAF == nil` 時，直接丟棄。Client 必須等 controller 選好 AF 並發來全量更新後，才知道該用哪個 AF
+
+### activeAF 的決策權
+
+* **Controller 決定 activeAF**: Controller 選擇最早建立連線的 AF 作為 active，對其發送全量更新
+* **Client 跟隨**: Client 收到某 AF 的全量更新 → 將該 AF 設為自己的 activeAF
+* 整體語義：activeAF 總是由 Controller 選擇，Client 只是確認
+
+## 死鎖預防：state.Write() + queue push
+
+`state.Write()` 持有 WLock 同時推 queue，而 sendloop 從 queue dequeue 後可能需要 RLock 取全量：
+
+```
+state.Write():                     sendloop:
+  WLock()                            dequeue ← queue 滿，阻塞
+  更新 state                         if !synced:
+  push to queue ← 阻塞（queue 滿）      RLock() ← WLock 被 Write 持有，死鎖
+  WUnlock()
+```
+
+**解法**: Write() 在鎖外推 queue：
+
+```
+state.WLock()
+更新 state
+複製 inc_msg
+state.WUnlock()
+push inc_msg to queue  // 鎖外，不會死鎖
+```
+
+若需要保證 inc 順序（多個 Write 並發），可加一把獨立的 send mutex 序列化 queue push，但不持有 state lock。
+
+## 資料結構
+
+* **ControllerState / ClientState**: 各自的全域狀態，受 RWLock 保護
+    * 任何時刻只有一個操作能持有 WLock：state mutation、全量推送準備、增量推送準備
+* **Per-peer 發送佇列**: 每個對端持有一個帶 buffer 的發送佇列（send queue），元素為 QueueItem
+* **QueueItem**: 佇列項目同時也是訊息結構，包含兩個欄位：
+    ```
+    QueueItem {
+        State   []byte  // 狀態更新（全量或增量），nil 表示無
+        Message []byte  // 非狀態訊息（probe request/result 等），nil 表示無
+    }
+    ```
+    * 入隊時：增量狀態更新填入 `State`，probe request 填入 `Message`
+    * sendloop 出隊時：若 `synced == false`，覆蓋 `State` 為 `getFullState()`（永遠比 queue 裡的資料新，不需要 merge）
+    * 收端：若 `State` 和 `Message` 都有值，當成兩個訊息分別處理
+    * **好處**: probe request/result 永遠不會因為狀態重同步而丟失
+* **synced 旗標**: 標記是否已完成全量同步。`synced=true` 在 sendloop **成功發送**全量後設定（非入隊時），確保發送失敗不會誤標
+
+## State Mutation（收到對端上報）
+
+1. WLock
+2. 修改 state
 3. Mutation 本身就是 delta（例如「client X 加入」「RouteMatrix 更新」），不需要額外 diff 計算
-4. 將 delta 推入所有 synced=true 的 Client 的發送佇列
-5. 釋放鎖
+4. WUnlock
+5. 將 delta 包裝為 `QueueItem{State: delta}` 推入所有 synced=true 的對端的發送佇列（鎖外，避免死鎖）
 
 ## 全量推送
 
 觸發時機：
-* 新 client 連入
-* TCP 斷線重連
-* Active AF 斷線切換 — Controller 發現某 client 的 active AF 連線斷開時，從剩餘連線中選擇最早建立的 AF 作為新的 active channel，對其執行全量推送。舊 AF 的發送佇列清空
+* 新 peer 連入
+* TCP 斷線重連（activeAF 斷線 → synced=false）
 
 流程：
-1. 取得鎖
-2. 將當前 ControllerState 的快照推入該 Client 的發送佇列
-3. 將該 Client 標記為 synced=true
-4. 釋放鎖
+1. synced=false（由 handleDisconnect 設定）
+2. sendloop dequeue QueueItem → 檢查 synced=false → 覆蓋 `item.State = getFullState()` → 發送 → synced=true
+3. 後續新增量正常入隊，sendloop 照序發送
+4. 不需要 drain 佇列 — getFullState() 永遠是最新的，覆蓋即可；Message 欄位不受影響
 
-因為標記 synced=true 和釋放鎖在同一個臨界區內，後續的 mutation 一定會將 delta 推入該 Client 的佇列，不會遺漏。
+因為 synced=true 的設定在成功發送全量之後，後續的 mutation 一定會將 delta 推入佇列，不會遺漏。
 
 ## 佇列滿的處理
 
-如果某 Client 的發送佇列已滿（網路過慢），將該 Client 標記為 synced=false 並清空佇列。該 Client 的發送 goroutine 發現 synced=false 後，主動觸發重新全量同步。
+如果某對端的發送佇列已滿（網路過慢），將其標記為 synced=false 並清空佇列。發送 goroutine 發現 synced=false 後，主動觸發重新全量同步。
 
 ## TCP 斷線重連
 
-* TCP 斷線重連成功後，重新經歷全量推送流程（取得鎖 → 快照推入發送佇列 → 標記 synced → 釋放鎖）
+* TCP 斷線重連成功後，重新經歷全量推送流程（drain → 發全量 → synced=true）
 * **TCP 斷線不影響 Client 的上線狀態和路由**：
     * Controller 維護的 ClientInfo、RouteMatrix、RouteTable 不因 TCP 斷線而立即清除
     * 由 ClientOfflineTimeout 控制：只有超過此 timeout 仍無法重連，才視為該 Client 離線，清除其相關路由並重新計算

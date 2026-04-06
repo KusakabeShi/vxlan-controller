@@ -196,13 +196,19 @@ type AFListener struct {
     UDPConn     net.PacketConn
 }
 
-// ClientConn 代表 Controller 與單一 Client 的連線狀態
+// QueueItem 是發送佇列的元素，同時也是訊息結構
+type QueueItem struct {
+    State   []byte  // 狀態更新（全量或增量），nil 表示無
+    Message []byte  // 非狀態訊息（probe request 等），nil 表示無
+}
+
+// ClientConn 代表 Controller 與單一 Client 的連線狀態（controller_com）
 type ClientConn struct {
     ClientID    ClientID
     AFConns     map[AFName]*AFConn     // 每個 AF 一條 TCP
-    ActiveAF    AFName                 // 當前 active 的 AF
-    Synced      bool
-    SendQueue   chan []byte            // buffered channel 作為發送佇列
+    ActiveAF    AFName                 // 當前 active 的 AF（Controller 選擇最早連線的 AF）
+    Synced      bool                   // 已發送全量給 Client，後續可發增量
+    SendQueue   chan QueueItem         // buffered channel 作為發送佇列
 }
 
 type AFConn struct {
@@ -210,7 +216,9 @@ type AFConn struct {
     TCPConn     net.Conn
     Session     *crypto.Session        // handshake 後的 session key
     ConnectedAt time.Time
-    Cancel      context.CancelFunc     // 用於停止該連線的 goroutine
+    Done        chan struct{}           // closed 時通知 goroutine 停止
+    Cleaned     chan struct{}           // handleDisconnect 完成清理後 close
+    doneOnce    sync.Once              // 防止 Done 被重複 close
 }
 ```
 
@@ -252,17 +260,47 @@ handleTCPConn:
   3. mu.Lock()
   4. 更新/建立 ClientInfo（Endpoints, LastSeen）
      - 若已存在 Client 且 Endpoint IP 變更 → 標記 ipChanged
-  5. 設定 AFConn, 判斷 ActiveAF（最早連線的 AF）
-     - 替換舊 AFConn 時先 close(oldAfc.Done) + oldAfc.TCPConn.Close()
-  6. 若此 AF 是 ActiveAF → 產生 ControllerState 快照推入 SendQueue, 標記 Synced=true
-  7. 新 Client: 更新 LastClientChange, 重設 newClientTimer, pushDelta(ClientJoined)
+  5. 建立新 AFConn
+  6. 替換舊 AFConn（單一清理路徑，統一由 handleDisconnect 處理）:
+     - 若同 AF 已有舊連線:
+       a. old.CloseDone()  // 通知舊 goroutine 停止（sync.Once 防重複 close）
+       b. mu.Unlock()
+       c. old.TCPConn.Close()  // 舊 goroutine 的 read 跳出
+       d. <-old.Cleaned  // 等待舊 goroutine 的 handleDisconnect 完成清理
+       e. mu.Lock()
+  7. 設定新 AFConn, 判斷 ActiveAF（最早連線的 AF）
+     - trySyncClient: 若有連線但未同步 → 發全量
+  8. 新 Client: 更新 LastClientChange, 重設 newClientTimer, pushDelta(ClientJoined)
      已有 Client: pushDelta(ClientInfoUpdate)
      - 若 ipChanged → 同時觸發 resetNewClientDebounce() 重新 probe + 拓撲更新
-  8. mu.Unlock()
-  9. 進入訊息讀取迴圈（tcpRecvLoop）
-  10. tcpRecvLoop 結束後 → handleDisconnect(cc, af, afc)
-      - 僅當 cc.AFConns[af] == afc 時才刪除（避免舊連線 cleanup 誤刪新連線）
+  9. mu.Unlock()
+  10. 進入訊息讀取迴圈（tcpRecvLoop）
+  11. tcpRecvLoop 結束後 → handleDisconnect(cc, af, afc)
 ```
+
+#### handleDisconnect（唯一的清理路徑）
+
+所有清理邏輯集中在 handleDisconnect，替換和正常斷線共用同一路徑：
+
+```
+handleDisconnect(cc, af, afc):
+  defer close(afc.Cleaned)  // 通知等待者清理完成
+  mu.Lock()
+  if cc.AFConns[af] != afc: return  // 已被替換，no-op（防禦性檢查）
+  delete(cc.AFConns, af)             // 清空該 AF handle
+  if af == cc.ActiveAF:
+      cc.ActiveAF = ""               // activeAF = nil
+      cc.Synced = false              // 需要重新全量同步
+      drain(cc.SendQueue)
+  // 非 activeAF 斷線：無事發生（僅清除 handle）
+  mu.Unlock()
+```
+
+- **非 activeAF 斷線**: 只清除 handle，不影響 synced 和 sendqueue
+- **activeAF 斷線**: `activeAF=nil` + `synced=false` + drain queue
+- 新連線進來時，controller 選新的 activeAF → sendloop 檢查 `synced==false` → 發全量
+
+clientSendLoop 的寫入錯誤不再做清理，統一由 handleDisconnect 處理。
 
 #### State Mutation（增量推送）
 
@@ -273,10 +311,9 @@ handleTCPConn 收到 MAC 上報 / ProbeResults:
   3. 序列化 delta 訊息
   4. for each client where Synced==true:
        select {
-       case client.SendQueue <- delta:  // 非阻塞嘗試
+       case client.SendQueue <- QueueItem{State: delta}:
        default:
-           client.Synced = false        // 佇列滿，標記需要重新全量同步
-           drain(client.SendQueue)
+           client.Synced = false        // 佇列滿，sendloop 下次出隊時會覆寫為全量
        }
   5. mu.Unlock()
 ```
@@ -284,13 +321,13 @@ handleTCPConn 收到 MAC 上報 / ProbeResults:
 #### 全量推送
 
 ```
-觸發: 新 Client 連入 / TCP 重連 / Active AF 切換
+觸發: 新 Client 連入 / TCP 重連 / Active AF 斷線
 
-  1. mu.Lock()
-  2. snapshot = serialize(ControllerState)
-  3. client.SendQueue <- snapshot
-  4. client.Synced = true
-  5. mu.Unlock()
+不再由入隊方產生全量快照。流程：
+  1. synced = false（由 handleDisconnect 或新連線邏輯設定）
+  2. trySyncClient: 推入空 QueueItem 觸發 sendloop
+  3. sendloop 出隊時檢查 synced=false → 覆寫 item.State = getFullState()
+  4. 成功發送後 synced = true
 ```
 
 #### Topology Update（收到 ProbeResults 後）
@@ -390,12 +427,14 @@ type Client struct {
     fdbPendingChanges   []neighChange
 }
 
+// ControllerConn 代表 Client 與單一 Controller 的連線狀態（client_com）
 type ControllerConn struct {
     ControllerID  ControllerID
     AFConns       map[AFName]*ClientAFConn
-    ActiveAF      AFName               // 收到全量更新的那個 AF
-    State         *ControllerView      // 該 Controller 推送的狀態
-    Synced        bool                 // 是否已收到 ControllerState
+    ActiveAF      AFName               // 收到 Controller 全量更新的 AF（Controller 決定，Client 跟隨）
+    State         *ControllerView      // 該 Controller 推送的狀態（client_side_controller_state）
+    Synced        bool                 // 是否已發送本地全量給 Controller（進入增量模式）
+    mu            sync.Mutex           // 保護 ActiveAF, Synced, AFConns 等內部狀態
 }
 
 type ControllerView struct {
@@ -753,19 +792,35 @@ Client A          Controller           Client B, C, D...
 
 ## 8. 多 AF 連線管理
 
-### Controller 側
+### Controller 側（controller_com）
 
 - 同一 `ClientID` 可能有多條 AF 連線（如 v4 + v6）
-- `ClientConn.ActiveAF` = 最早建立連線的 AF
-- Active AF 斷線 → 切換到剩餘最早連線的 AF → 對該 AF 發送全量更新
-- 非 active AF 斷線 → 僅移除 `AFConn`，不影響推送
+- `ClientConn.ActiveAF` = 最早建立連線的 AF（**Controller 決定**）
+- **非 activeAF 斷線** → 清空該 AF handle，無其他影響
+- **activeAF 斷線** → `activeAF = nil` + `synced = false` + drain queue
+- 新連線進來（通過驗證）：
+    - 對應 AF handle 為 nil → 直接設定
+    - 對應 AF handle 不為 nil → 關閉舊連線 → 等 handleDisconnect 清理完 → 替換
+- 新連線設定後，sendloop 若 activeAF==nil 則直接選存活 AF 寫入 activeAF，檢查 synced=false → 發全量
+- `activeAF`、`synced`、`AFConns` 受 Controller.mu 保護
 
-### Client 側
+### Client 側（client_com）
 
 - 對每個 Controller 維護多條 AF 連線
-- 收到某 AF 的全量更新 → 將該 AF 設為 `ActiveAF`
-- 上報訊息（MACUpdate / ProbeResults）使用 `ActiveAF` 的 TCP 連線
+- 收到某 AF 的 Controller 全量更新 → 將該 AF 設為 `ActiveAF`（**跟隨 Controller 決策**）
+- `synced` 在發送本地全量給 Controller 後變為 true
+- sendloop 發送時：若 `activeAF == nil`，直接丟棄（等 controller 發全量更新後才設定 activeAF）；若 `synced == false`，改發全量
 - 某 AF 斷線 → 自動重連（指數退避），不影響其他 AF
+- `activeAF`、`synced`、`AFConns` 受 `ControllerConn.mu` 保護
+
+### activeAF 語義統一
+
+| | Controller 端 | Client 端 |
+|---|---|---|
+| 誰設定 | Controller 自己選（最早連線的 AF） | 收到 Controller 全量更新時設定 |
+| 含義 | 透過此 AF 發送訊息給 Client | 透過此 AF 接收 Controller 訊息 |
+| 何時 nil | active AF 斷線且無其他 AF | active AF 斷線 |
+| sendloop 行為 | activeAF==nil 時直接選存活 AF 並寫入 activeAF | activeAF==nil 時丟棄，等 controller 選好 |
 
 ---
 
@@ -773,7 +828,7 @@ Client A          Controller           Client B, C, D...
 
 ```go
 // Controller: Per-Client 發送佇列
-SendQueue chan []byte  // buffered, 容量可配置 (e.g. 256)
+SendQueue chan QueueItem  // buffered, 容量可配置 (e.g. 256)
 
 // Client: broadcast 注入佇列
 tapInjectCh chan []byte  // tapWriteLoop 從此 channel 讀取並寫入 tap fd
@@ -787,7 +842,66 @@ authorityChangeCh chan struct{}  // Synced 狀態變化時觸發重新評估
 
 ---
 
-## 10. 外部依賴
+## 10. 並發與鎖設計
+
+### 鎖清單
+
+| 鎖 | 保護範圍 | 持有者 |
+|---|---|---|
+| `Controller.mu` | ControllerState, clients map, AFConns, ActiveAF, Synced, debounce timers | handleTCPConn, handleDisconnect, tcpRecvLoop, offlineChecker, triggerSyncNewClient, triggerTopologyUpdate |
+| `ControllerConn.mu` (Client 端) | ActiveAF, Synced, AFConns（per-controller 通訊通道內部狀態）| tcpConnLoop, tcpRecvLoop, sendloop, neighborWatchLoop |
+| `client_state RWLock` | 本地 MAC/neigh 狀態 | neighborWatchLoop(W), sendloop(R via getFullState) |
+| `client_side_controller_state RWLock` | Controller 推送的狀態視圖 | tcpRecvLoop(W), fdbReconcileLoop(R) |
+
+### 死鎖預防
+
+`state.Write()` 持有 WLock 推 queue + sendloop dequeue 後需要 RLock 取全量 = 死鎖風險。
+
+**規則**: state lock 和 queue push 不同時持有。先 unlock，再推 queue：
+
+```go
+// 正確
+state.WLock()
+更新 state
+msg := 複製增量
+state.WUnlock()
+queue <- msg  // 鎖外
+
+// 錯誤（可能死鎖）
+state.WLock()
+更新 state
+queue <- msg  // 若 queue 滿 + sendloop 需要 RLock → 死鎖
+state.WUnlock()
+```
+
+### client_side_controller_state 寫入觸發 FDB
+
+```go
+func (cs *ControllerState) Write(update) {
+    cs.WLock()
+    套用 update
+    cs.WUnlock()
+
+    if 是權威控制器 {
+        notifyFDB()  // non-blocking channel push
+        // fdbReconcileLoop 異步執行：RLock 讀 controller state → 計算 FDB → netlink 寫入 kernel
+    }
+}
+```
+
+`notifyFDB()` 在鎖外調用，避免嵌套鎖。FDB reconcile goroutine 用 RLock 讀取狀態，不與 Write 的 WLock 衝突。
+
+### handleDisconnect 的 Cleaned 信號
+
+AFConn 持有 `Cleaned chan struct{}`，`handleDisconnect` 執行 `defer close(afc.Cleaned)` 通知等待者清理完成：
+
+- **替換場景**: handleTCPConn close 舊連線 → 等 `<-oldAfc.Cleaned` → 繼續設新連線
+- **正常斷線**: handleDisconnect 完成後 close Cleaned（無人等待，自然 GC）
+- **Done 用 sync.Once 保護**: 防止多個 goroutine 同時 close（例如第三條連線幾乎同時到達）
+
+---
+
+## 11. 外部依賴
 
 | 依賴 | 用途 |
 |------|------|
@@ -799,7 +913,7 @@ authorityChangeCh chan struct{}  // Synced 狀態變化時觸發重新評估
 
 ---
 
-## 11. Graceful Shutdown
+## 12. Graceful Shutdown
 
 ```
 收到 SIGTERM/SIGINT:
