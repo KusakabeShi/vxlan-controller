@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/netip"
 	"time"
+
+	"vxlan-controller/pkg/filter"
 )
 
 // ClientID is an X25519 public key, 32 bytes.
@@ -42,6 +44,7 @@ type PerClientConfig struct {
 	ClientID       ClientID
 	ClientName     string
 	AdditionalCost float64 // default 20
+	Filters        *filter.FilterConfig
 }
 
 // ClientInfo is maintained by the Controller for each connected Client.

@@ -97,15 +97,25 @@ func (c *Client) handleNeighEvent(update netlink.NeighUpdate) {
 		}
 	}
 
+	// Filter outbound route
+	macStr := net.HardwareAddr(rt.Mac).String()
+	ipStr := ""
+	if len(rt.Ip) > 0 {
+		if len(rt.Ip) == 4 {
+			ipStr = netip.AddrFrom4([4]byte(rt.Ip)).String()
+		} else if len(rt.Ip) == 16 {
+			ipStr = netip.AddrFrom16([16]byte(rt.Ip)).String()
+		}
+	}
+	if !c.Filters.OutputRoute.FilterRoute(macStr, ipStr, isDelete) {
+		return
+	}
+
 	// Update local state
 	c.mu.Lock()
 	localRT := types.Type2Route{MAC: rt.Mac}
-	if len(rt.Ip) > 0 {
-		if len(rt.Ip) == 4 {
-			localRT.IP = netip.AddrFrom4([4]byte(rt.Ip))
-		} else if len(rt.Ip) == 16 {
-			localRT.IP = netip.AddrFrom16([16]byte(rt.Ip))
-		}
+	if ipStr != "" {
+		localRT.IP, _ = netip.ParseAddr(ipStr)
 	}
 	if isDelete {
 		c.LocalMACs = removeLocalRoute(c.LocalMACs, localRT)
@@ -129,7 +139,13 @@ func (c *Client) handleNeighEvent(update netlink.NeighUpdate) {
 	c.mu.Lock()
 	for _, cc := range c.Controllers {
 		if !cc.MACsSynced {
-			continue // sendloop will send full state anyway
+			// sendloop will replace State with full MACs, but we still need
+			// to wake it up — push an empty trigger so it doesn't block.
+			select {
+			case cc.SendQueue <- ClientQueueItem{}:
+			default:
+			}
+			continue
 		}
 		select {
 		case cc.SendQueue <- ClientQueueItem{State: msg}:
@@ -212,7 +228,21 @@ func (c *Client) dumpLocalState() {
 		}
 	}
 
-	log.Printf("[Client] local state dump: found %d local routes", len(routes))
+	// Filter outbound routes
+	total := len(routes)
+	var filtered []types.Type2Route
+	for _, rt := range routes {
+		ipStr := ""
+		if rt.IP.IsValid() {
+			ipStr = rt.IP.String()
+		}
+		if c.Filters.OutputRoute.FilterRoute(rt.MAC.String(), ipStr, false) {
+			filtered = append(filtered, rt)
+		}
+	}
+	routes = filtered
+
+	log.Printf("[Client] local state dump: found %d local routes (%d after filter)", total, len(routes))
 
 	c.mu.Lock()
 	c.LocalMACs = routes

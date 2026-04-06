@@ -2,6 +2,8 @@ package controller
 
 import (
 	"log"
+	"net"
+	"net/netip"
 
 	"google.golang.org/protobuf/proto"
 
@@ -13,25 +15,69 @@ import (
 // pushDelta sends an incremental update to all synced clients.
 // Must be called with c.mu held.
 func (c *Controller) pushDelta(update *pb.ControllerStateUpdate) {
+	// Check if this is a RouteTableUpdate that needs per-client filtering
+	rtUpdate, isRouteTable := update.Update.(*pb.ControllerStateUpdate_RouteTableUpdate)
+
+	// Pre-marshal the unfiltered version for clients without route filters
 	data, err := proto.Marshal(update)
 	if err != nil {
 		log.Printf("[Controller] failed to marshal ControllerStateUpdate: %v", err)
 		return
 	}
+	defaultMsg := encodeMessage(protocol.MsgControllerStateUpdate, data)
 
-	msg := encodeMessage(protocol.MsgControllerStateUpdate, data)
 	for _, cc := range c.clients {
 		if !cc.Synced {
 			continue
 		}
+
+		msg := defaultMsg
+
+		// Per-client route filtering for RouteTableUpdate
+		if isRouteTable && cc.Filters != nil {
+			filtered := c.filterRouteTableForClient(rtUpdate.RouteTableUpdate.Entries, cc)
+			if len(filtered) != len(rtUpdate.RouteTableUpdate.Entries) {
+				filteredUpdate := &pb.ControllerStateUpdate{
+					Update: &pb.ControllerStateUpdate_RouteTableUpdate{
+						RouteTableUpdate: &pb.RouteTableUpdateProto{
+							Entries: filtered,
+						},
+					},
+				}
+				if d, err := proto.Marshal(filteredUpdate); err == nil {
+					msg = encodeMessage(protocol.MsgControllerStateUpdate, d)
+				}
+			}
+		}
+
 		select {
 		case cc.SendQueue <- QueueItem{State: msg}:
 		default:
 			log.Printf("[Controller] send queue full for client %s, marking unsynced", cc.ClientID.Hex())
 			cc.Synced = false
-			// No drain — sendloop will overwrite State with full on next dequeue
 		}
 	}
+}
+
+// filterRouteTableForClient filters route table entries through a client's output_route filter.
+func (c *Controller) filterRouteTableForClient(entries []*pb.RouteTableEntryProto, cc *ClientConn) []*pb.RouteTableEntryProto {
+	if cc.Filters == nil {
+		return entries
+	}
+	var filtered []*pb.RouteTableEntryProto
+	for _, e := range entries {
+		mac := net.HardwareAddr(e.Mac).String()
+		ip := ""
+		if len(e.Ip) == 4 {
+			ip = netip.AddrFrom4([4]byte(e.Ip)).String()
+		} else if len(e.Ip) == 16 {
+			ip = netip.AddrFrom16([16]byte(e.Ip)).String()
+		}
+		if cc.Filters.OutputRoute.FilterRoute(mac, ip, false) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
 }
 
 // encodeMessage prepends the msg_type byte to payload.
@@ -42,10 +88,16 @@ func encodeMessage(msgType protocol.MsgType, payload []byte) []byte {
 	return msg
 }
 
-// getFullStateEncoded returns the full state snapshot as an encoded message.
+// getFullStateEncodedForClient returns the full state snapshot, filtered for the given client.
 // Must be called with c.mu held (at least RLock).
-func (c *Controller) getFullStateEncoded() []byte {
+func (c *Controller) getFullStateEncodedForClient(cc *ClientConn) []byte {
 	snapshot := c.State.Snapshot(c.ControllerID)
+
+	// Filter RouteTable for this client
+	if cc.Filters != nil {
+		snapshot.RouteTable = c.filterRouteTableForClient(snapshot.RouteTable, cc)
+	}
+
 	data, err := proto.Marshal(snapshot)
 	if err != nil {
 		log.Printf("[Controller] failed to marshal ControllerState: %v", err)

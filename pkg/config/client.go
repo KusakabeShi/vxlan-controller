@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/types"
 
 	"gopkg.in/yaml.v3"
@@ -21,6 +22,7 @@ type ClientConfigFile struct {
 	InitTimeout       int                             `yaml:"init_timeout"`
 	NTPServers        []string                        `yaml:"ntp_servers"`
 	NTPPeriodH        int                             `yaml:"ntp_period_h"`
+	Filters           *filter.FilterConfigFile         `yaml:"filters"`
 }
 
 type ClientAFConfigFile struct {
@@ -53,6 +55,7 @@ type ClientConfig struct {
 	InitTimeout      time.Duration
 	NTPServers       []string
 	NTPPeriod        time.Duration
+	Filters          *filter.FilterConfig
 }
 
 type ClientAFConfig struct {
@@ -100,6 +103,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		NTPServers:       raw.NTPServers,
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
+		Filters:          filter.ParseFilterConfigFile(raw.Filters),
 	}
 
 	// Parse private key

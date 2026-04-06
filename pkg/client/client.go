@@ -18,6 +18,7 @@ import (
 	"vxlan-controller/pkg/config"
 	"vxlan-controller/pkg/controller"
 	"vxlan-controller/pkg/crypto"
+	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/ntp"
 	"vxlan-controller/pkg/protocol"
 	"vxlan-controller/pkg/types"
@@ -44,6 +45,9 @@ type Client struct {
 
 	// FDB state
 	CurrentFDB map[fdbKey]fdbEntry
+
+	// Filters
+	Filters *filter.FilterSet
 
 	// NTP
 	ntp *ntp.TimeSync
@@ -128,6 +132,11 @@ func New(cfg *config.ClientConfig) *Client {
 	pubKey := crypto.PublicKey(cfg.PrivateKey)
 	ctx, cancel := context.WithCancel(context.Background())
 
+	filters, err := filter.NewFilterSet(cfg.Filters)
+	if err != nil {
+		log.Fatalf("[Client] failed to initialize filters: %v", err)
+	}
+
 	c := &Client{
 		Config:            cfg,
 		PrivateKey:        cfg.PrivateKey,
@@ -135,6 +144,7 @@ func New(cfg *config.ClientConfig) *Client {
 		Controllers:       make(map[types.ControllerID]*ControllerConn),
 		VxlanDevs:         make(map[types.AFName]*VxlanDev),
 		CurrentFDB:        make(map[fdbKey]fdbEntry),
+		Filters:           filters,
 		ntp:               ntp.New(cfg.NTPServers),
 		probeConns:        make(map[types.AFName]*net.UDPConn),
 		probeSessions:     crypto.NewSessionManager(),
@@ -275,6 +285,8 @@ func (c *Client) Stop() {
 		}
 	}
 	c.mu.Unlock()
+
+	c.Filters.Close()
 }
 
 func (c *Client) tcpConnLoop(ctrlID types.ControllerID, af types.AFName, ctrl config.ControllerEndpoint) {
@@ -546,6 +558,11 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 
 			log.Printf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
 
+			// Filter inbound multicast
+			if !c.Filters.InputMcast.FilterMcast(deliver.Payload) {
+				continue
+			}
+
 			// Inject into tap
 			select {
 			case c.tapInjectCh <- deliver.Payload:
@@ -603,12 +620,15 @@ func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFNam
 	}
 
 	// Update view
+	routeTable := controller.ProtoToRouteTable(state.RouteTable)
+	routeTable = c.filterRouteTable(routeTable)
+
 	view := &ControllerView{
 		ClientCount:      int(state.ClientCount),
 		LastClientChange: time.Unix(0, state.LastClientChangeTimestamp),
 		Clients:          make(map[types.ClientID]*ClientInfoView),
 		RouteMatrix:      controller.ProtoToRouteMatrix(state.RouteMatrix),
-		RouteTable:       controller.ProtoToRouteTable(state.RouteTable),
+		RouteTable:       routeTable,
 		LatencyMatrix:    make(map[types.ClientID]map[types.ClientID]*types.SelectedLatency),
 	}
 
@@ -673,7 +693,8 @@ func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload 
 		cc.State.RouteMatrix = controller.ProtoToRouteMatrix(u.RouteMatrixUpdate.RouteMatrix)
 
 	case *pb.ControllerStateUpdate_RouteTableUpdate:
-		cc.State.RouteTable = controller.ProtoToRouteTable(u.RouteTableUpdate.Entries)
+		rt := controller.ProtoToRouteTable(u.RouteTableUpdate.Entries)
+		cc.State.RouteTable = c.filterRouteTable(rt)
 
 	case *pb.ControllerStateUpdate_ClientInfoUpdate:
 		civ := protoToClientInfoView(u.ClientInfoUpdate.ClientInfo)
@@ -751,6 +772,22 @@ func protoToClientInfoView(p *pb.ClientInfoProto) *ClientInfoView {
 	}
 
 	return civ
+}
+
+// filterRouteTable filters a RouteTable through the input_route filter.
+func (c *Client) filterRouteTable(rt []*types.RouteTableEntry) []*types.RouteTableEntry {
+	var filtered []*types.RouteTableEntry
+	for _, entry := range rt {
+		mac := entry.MAC.String()
+		ip := ""
+		if entry.IP.IsValid() {
+			ip = entry.IP.String()
+		}
+		if c.Filters.InputRoute.FilterRoute(mac, ip, false) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 // controllerSendLoop dequeues items and sends to the controller.

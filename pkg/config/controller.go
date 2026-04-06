@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/types"
 
 	"gopkg.in/yaml.v3"
@@ -42,9 +43,10 @@ type ProbingConfigFile struct {
 }
 
 type PerClientConfigFile struct {
-	ClientID       string  `yaml:"client_id"`
-	ClientName     string  `yaml:"client_name"`
-	AdditionalCost float64 `yaml:"additional_cost"`
+	ClientID       string                   `yaml:"client_id"`
+	ClientName     string                   `yaml:"client_name"`
+	AdditionalCost float64                  `yaml:"additional_cost"`
+	Filters        *filter.FilterConfigFile `yaml:"filters"`
 }
 
 // ControllerConfig is the parsed controller configuration.
@@ -143,6 +145,7 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 		pc := types.PerClientConfig{
 			ClientName:     clientRaw.ClientName,
 			AdditionalCost: clientRaw.AdditionalCost,
+			Filters:        filter.ParseFilterConfigFile(clientRaw.Filters),
 		}
 		if pc.AdditionalCost == 0 {
 			pc.AdditionalCost = 20

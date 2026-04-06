@@ -13,6 +13,7 @@ import (
 
 	"vxlan-controller/pkg/config"
 	"vxlan-controller/pkg/crypto"
+	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/protocol"
 	"vxlan-controller/pkg/types"
 
@@ -310,10 +311,26 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 	// Find or create ClientConn
 	cc, ccExists := c.clients[clientID]
 	if !ccExists {
+		// Look up per-client filter config
+		var filterCfg *filter.FilterConfig
+		for _, pc := range c.Config.AllowedClients {
+			if pc.ClientID == clientID {
+				filterCfg = pc.Filters
+				break
+			}
+		}
+		filters, err := filter.NewFilterSet(filterCfg)
+		if err != nil {
+			log.Printf("[Controller] failed to init filters for client %s: %v", clientID.Hex()[:8], err)
+			c.mu.Unlock()
+			conn.Close()
+			return
+		}
 		cc = &ClientConn{
 			ClientID:  clientID,
 			AFConns:   make(map[types.AFName]*AFConn),
 			SendQueue: make(chan QueueItem, sendQueueSize),
+			Filters:   filters,
 		}
 		c.clients[clientID] = cc
 		go c.clientSendLoop(cc)
@@ -457,6 +474,16 @@ func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 			} else if len(r.Ip) == 16 {
 				rt.IP = netip.AddrFrom16([16]byte(r.Ip))
 			}
+			// Filter inbound route
+			if cc.Filters != nil {
+				ipStr := ""
+				if rt.IP.IsValid() {
+					ipStr = rt.IP.String()
+				}
+				if !cc.Filters.InputRoute.FilterRoute(rt.MAC.String(), ipStr, false) {
+					continue
+				}
+			}
 			routes = append(routes, rt)
 		}
 		ci.Routes = routes
@@ -469,6 +496,16 @@ func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 				rt.IP = netip.AddrFrom4([4]byte(r.Ip))
 			} else if len(r.Ip) == 16 {
 				rt.IP = netip.AddrFrom16([16]byte(r.Ip))
+			}
+			// Filter inbound route
+			if cc.Filters != nil {
+				ipStr := ""
+				if rt.IP.IsValid() {
+					ipStr = rt.IP.String()
+				}
+				if !cc.Filters.InputRoute.FilterRoute(rt.MAC.String(), ipStr, r.IsDelete) {
+					continue
+				}
 			}
 			if r.IsDelete {
 				ci.Routes = removeRoute(ci.Routes, rt)
@@ -694,9 +731,9 @@ func (c *Controller) clientSendLoop(cc *ClientConn) {
 
 		afc := cc.AFConns[cc.ActiveAF]
 
-		// If not synced, overwrite State with full state
+		// If not synced, overwrite State with full state (filtered for this client)
 		if !cc.Synced {
-			item.State = c.getFullStateEncoded()
+			item.State = c.getFullStateEncodedForClient(cc)
 		}
 
 		c.mu.Unlock()
@@ -800,6 +837,7 @@ func (c *Controller) checkOfflineClients() {
 				afc.CloseDone()
 				afc.TCPConn.Close()
 			}
+			cc.Filters.Close()
 			delete(c.clients, id)
 		}
 
@@ -971,6 +1009,18 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 		return
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	srcID := types.ClientID(sourceClientID)
+
+	// Input filter: check source client's filter
+	if srcCC, ok := c.clients[srcID]; ok && srcCC.Filters != nil {
+		if !srcCC.Filters.InputMcast.FilterMcast(fwd.Payload) {
+			return
+		}
+	}
+
 	deliver := &pb.MulticastDeliver{
 		SourceClientId: fwd.SourceClientId,
 		Payload:        fwd.Payload,
@@ -980,10 +1030,6 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 		return
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	srcID := types.ClientID(sourceClientID)
 	deliveredTo := 0
 
 	// Send on ALL AF listeners, not just the one that received the forward
@@ -993,6 +1039,11 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 				continue // skip source
 			}
 			if !cc.Synced {
+				continue
+			}
+
+			// Output filter: check destination client's filter
+			if cc.Filters != nil && !cc.Filters.OutputMcast.FilterMcast(fwd.Payload) {
 				continue
 			}
 

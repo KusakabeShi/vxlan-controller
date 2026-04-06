@@ -79,6 +79,7 @@ type PerClientConfig struct {
 // ClientInfo 是 Controller 維護的單一 Client 資訊
 type ClientInfo struct {
     ClientID       ClientID
+    ClientName     string                // 來自 PerClientConfig，debug 用
     Endpoints      map[AFName]*Endpoint  // 每個 AF 的端點
     LastSeen       time.Time
     Routes         []Type2Route          // Client 上報的 MAC/IP

@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"time"
 	"unsafe"
 
 	"google.golang.org/protobuf/proto"
@@ -18,8 +17,7 @@ import (
 )
 
 const (
-	tapDeviceName   = "tap-inject"
-	maxBroadcastPPS = 100
+	tapDeviceName = "tap-inject"
 )
 
 // openTapDevice opens /dev/net/tun with IFF_TAP | IFF_NO_PI.
@@ -50,8 +48,6 @@ func (c *Client) tapReadLoop() {
 	}
 
 	buf := make([]byte, 65536)
-	tokens := float64(maxBroadcastPPS)
-	lastRefill := time.Now()
 
 	log.Printf("[Client] tapReadLoop started, fd=%v", c.TapFD.Fd())
 
@@ -80,23 +76,16 @@ func (c *Client) tapReadLoop() {
 
 		log.Printf("[Client] tap: read %d bytes, dst=%02x:%02x:%02x:%02x:%02x:%02x", n, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
 
-		now := time.Now()
-		elapsed := now.Sub(lastRefill).Seconds()
-		tokens += elapsed * float64(maxBroadcastPPS)
-		if tokens > float64(maxBroadcastPPS) {
-			tokens = float64(maxBroadcastPPS)
-		}
-		lastRefill = now
-
-		if tokens < 1 {
-			continue
-		}
-		tokens--
-
 		frame := make([]byte, n)
 		copy(frame, buf[:n])
 
+		// Skip unicast
 		if frame[0]&0x01 == 0 {
+			continue
+		}
+
+		// Filter outbound multicast (rate limit + Lua)
+		if !c.Filters.OutputMcast.FilterMcast(frame) {
 			continue
 		}
 

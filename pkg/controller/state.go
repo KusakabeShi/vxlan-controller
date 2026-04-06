@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"vxlan-controller/pkg/crypto"
+	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/types"
 
 	pb "vxlan-controller/proto"
@@ -45,6 +46,7 @@ type ClientConn struct {
 	ActiveAF  types.AFName
 	Synced    bool
 	SendQueue chan QueueItem
+	Filters   *filter.FilterSet
 }
 
 // AFConn represents a single AF TCP connection to a client.
