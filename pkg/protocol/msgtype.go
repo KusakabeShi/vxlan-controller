@@ -11,7 +11,8 @@ const (
 	// Client → Controller (TCP)
 	MsgClientRegister MsgType = 0x10
 	MsgMACUpdate      MsgType = 0x11
-	MsgProbeResults   MsgType = 0x12
+	MsgProbeResults     MsgType = 0x12
+	MsgMcastStatsReport MsgType = 0x13
 
 	// Controller → Client (TCP)
 	MsgControllerState        MsgType = 0x20

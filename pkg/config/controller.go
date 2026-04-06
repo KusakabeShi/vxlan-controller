@@ -24,6 +24,18 @@ type ControllerConfigFile struct {
 	Probing                ProbingConfigFile                   `yaml:"probing"`
 	AllowedClients         []PerClientConfigFile               `yaml:"allowed_clients"`
 	LogLevel               string                             `yaml:"log_level"`
+	WebUI                  *WebUIConfigFile                    `yaml:"web_ui"`
+}
+
+type WebUIConfigFile struct {
+	BindAddr   string                       `yaml:"bind_addr"`
+	MacAliases map[string]string            `yaml:"mac_aliases"`
+	Nodes      map[string]*WebUINodeFile    `yaml:"nodes"`
+}
+
+type WebUINodeFile struct {
+	Label string     `yaml:"label"`
+	Pos   [2]float64 `yaml:"pos"`
 }
 
 type ControllerAFConfigFile struct {
@@ -44,10 +56,9 @@ type ProbingConfigFile struct {
 }
 
 type PerClientConfigFile struct {
-	ClientID       string                   `yaml:"client_id"`
-	ClientName     string                   `yaml:"client_name"`
-	AdditionalCost float64                  `yaml:"additional_cost"`
-	Filters        *filter.FilterConfigFile `yaml:"filters"`
+	ClientID   string                   `yaml:"client_id"`
+	ClientName string                   `yaml:"client_name"`
+	Filters    *filter.FilterConfigFile `yaml:"filters"`
 }
 
 // ControllerConfig is the parsed controller configuration.
@@ -62,6 +73,18 @@ type ControllerConfig struct {
 	Probing                   ProbingConfig
 	AllowedClients            []types.PerClientConfig
 	LogLevel                  string
+	WebUI                     *WebUIConfig
+}
+
+type WebUIConfig struct {
+	BindAddr   string
+	MacAliases map[string]string
+	Nodes      map[string]*WebUINode
+}
+
+type WebUINode struct {
+	Label string
+	Pos   [2]float64
 }
 
 type ControllerAFConfig struct {
@@ -146,12 +169,8 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 	// Parse allowed clients
 	for _, clientRaw := range raw.AllowedClients {
 		pc := types.PerClientConfig{
-			ClientName:     clientRaw.ClientName,
-			AdditionalCost: clientRaw.AdditionalCost,
-			Filters:        filter.ParseFilterConfigFile(clientRaw.Filters),
-		}
-		if pc.AdditionalCost == 0 {
-			pc.AdditionalCost = 20
+			ClientName: clientRaw.ClientName,
+			Filters:    filter.ParseFilterConfigFile(clientRaw.Filters),
 		}
 
 		pubBytes, err := base64.StdEncoding.DecodeString(clientRaw.ClientID)
@@ -164,6 +183,24 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 		copy(pc.ClientID[:], pubBytes)
 
 		cfg.AllowedClients = append(cfg.AllowedClients, pc)
+	}
+
+	// Parse WebUI config
+	if raw.WebUI != nil && raw.WebUI.BindAddr != "" {
+		wui := &WebUIConfig{
+			BindAddr:   raw.WebUI.BindAddr,
+			MacAliases: raw.WebUI.MacAliases,
+		}
+		if len(raw.WebUI.Nodes) > 0 {
+			wui.Nodes = make(map[string]*WebUINode, len(raw.WebUI.Nodes))
+			for name, n := range raw.WebUI.Nodes {
+				wui.Nodes[name] = &WebUINode{
+					Label: n.Label,
+					Pos:   n.Pos,
+				}
+			}
+		}
+		cfg.WebUI = wui
 	}
 
 	return cfg, nil

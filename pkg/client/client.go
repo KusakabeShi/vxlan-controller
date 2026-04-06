@@ -49,6 +49,9 @@ type Client struct {
 	// Filters
 	Filters *filter.FilterSet
 
+	// Multicast stats
+	mcastStats *McastStats
+
 	// NTP
 	ntp *ntp.TimeSync
 
@@ -113,17 +116,15 @@ type ControllerView struct {
 	Clients          map[types.ClientID]*ClientInfoView
 	RouteMatrix      map[types.ClientID]map[types.ClientID]*types.RouteEntry
 	RouteTable       []*types.RouteTableEntry
-	LatencyMatrix    map[types.ClientID]map[types.ClientID]*types.SelectedLatency
 }
 
 // ClientInfoView is the Client's view of a ClientInfo from the Controller.
 type ClientInfoView struct {
-	ClientID       types.ClientID
-	ClientName     string
-	Endpoints      map[types.AFName]*types.Endpoint
-	LastSeen       time.Time
-	Routes         []types.Type2Route
-	AdditionalCost float64
+	ClientID  types.ClientID
+	ClientName string
+	Endpoints map[types.AFName]*types.Endpoint
+	LastSeen  time.Time
+	Routes    []types.Type2Route
 }
 
 const clientSendQueueSize = 256
@@ -145,6 +146,7 @@ func New(cfg *config.ClientConfig) *Client {
 		VxlanDevs:         make(map[types.AFName]*VxlanDev),
 		CurrentFDB:        make(map[fdbKey]fdbEntry),
 		Filters:           filters,
+		mcastStats:        newMcastStats(),
 		ntp:               ntp.New(cfg.NTPServers),
 		probeConns:        make(map[types.AFName]*net.UDPConn),
 		probeSessions:     crypto.NewSessionManager(),
@@ -192,9 +194,8 @@ func (c *Client) Run() error {
 			AFConns:      make(map[types.AFName]*ClientAFConn),
 			SendQueue:    make(chan ClientQueueItem, clientSendQueueSize),
 			State: &ControllerView{
-				Clients:       make(map[types.ClientID]*ClientInfoView),
-				RouteMatrix:   make(map[types.ClientID]map[types.ClientID]*types.RouteEntry),
-				LatencyMatrix: make(map[types.ClientID]map[types.ClientID]*types.SelectedLatency),
+				Clients:     make(map[types.ClientID]*ClientInfoView),
+				RouteMatrix: make(map[types.ClientID]map[types.ClientID]*types.RouteEntry),
 			},
 		}
 	}
@@ -232,6 +233,9 @@ func (c *Client) Run() error {
 
 	// Step 8: Start FDB reconciler
 	go c.fdbReconcileLoop()
+
+	// Step 8b: Start mcast stats reporter
+	go c.mcastStatsReportLoop()
 
 	// Step 9: Authority selection with init_timeout
 	go func() {
@@ -559,7 +563,9 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 			vlog.Debugf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
 
 			// Filter inbound multicast
-			if !c.Filters.InputMcast.FilterMcast(deliver.Payload) {
+			accepted, reason := c.Filters.InputMcast.FilterMcast(deliver.Payload)
+			c.mcastStats.RecordRx(deliver.Payload, accepted, reason)
+			if !accepted {
 				continue
 			}
 
@@ -629,7 +635,6 @@ func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFNam
 		Clients:          make(map[types.ClientID]*ClientInfoView),
 		RouteMatrix:      controller.ProtoToRouteMatrix(state.RouteMatrix),
 		RouteTable:       routeTable,
-		LatencyMatrix:    make(map[types.ClientID]map[types.ClientID]*types.SelectedLatency),
 	}
 
 	for _, ci := range state.Clients {
@@ -741,10 +746,9 @@ func (c *Client) getVxlanDstPort(af types.AFName) uint16 {
 
 func protoToClientInfoView(p *pb.ClientInfoProto) *ClientInfoView {
 	civ := &ClientInfoView{
-		ClientName:     p.ClientName,
-		Endpoints:      make(map[types.AFName]*types.Endpoint),
-		LastSeen:       time.Unix(0, p.LastSeen),
-		AdditionalCost: p.AdditionalCost,
+		ClientName: p.ClientName,
+		Endpoints:  make(map[types.AFName]*types.Endpoint),
+		LastSeen:   time.Unix(0, p.LastSeen),
 	}
 	copy(civ.ClientID[:], p.ClientId)
 

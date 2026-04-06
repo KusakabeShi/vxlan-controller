@@ -345,7 +345,8 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 			}
 
 			result := &pb.AFProbeResult{
-				Priority: int32(afCfg.Priority),
+				Priority:       int32(afCfg.Priority),
+				AdditionalCost: afCfg.AdditionalCost,
 			}
 
 			if len(lats) == 0 {

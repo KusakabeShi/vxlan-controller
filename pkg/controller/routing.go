@@ -4,9 +4,9 @@ import (
 	"vxlan-controller/pkg/types"
 )
 
-// computeRouteMatrix uses Floyd-Warshall on the AdditionalCost-weighted LatencyMatrix.
+// computeRouteMatrix uses Floyd-Warshall on precomputed best paths.
 func computeRouteMatrix(
-	latencyMatrix map[types.ClientID]map[types.ClientID]*types.SelectedLatency,
+	bestPaths map[types.ClientID]map[types.ClientID]*types.BestPathEntry,
 	clients map[types.ClientID]*ClientInfo,
 ) map[types.ClientID]map[types.ClientID]*types.RouteEntry {
 	// Collect all client IDs
@@ -41,30 +41,24 @@ func computeRouteMatrix(
 		}
 	}
 
-	// Fill direct edges from LatencyMatrix with AdditionalCost weighting
-	for src, dsts := range latencyMatrix {
+	// Fill direct edges from precomputed best paths
+	for src, dsts := range bestPaths {
 		srcI, ok := nodeIdx[src]
 		if !ok {
 			continue
 		}
-		for dst, sl := range dsts {
+		for dst, bp := range dsts {
 			dstI, ok := nodeIdx[dst]
 			if !ok {
 				continue
 			}
-			if sl.Latency >= types.INF_LATENCY {
+			if bp.Cost >= types.INF_LATENCY {
 				continue
 			}
-			// cost = latency + AdditionalCost[dst]
-			additionalCost := float64(0)
-			if ci, ok := clients[dst]; ok {
-				additionalCost = ci.AdditionalCost
-			}
-			c := sl.Latency + additionalCost
-			if c < cost[srcI][dstI] {
-				cost[srcI][dstI] = c
+			if bp.Cost < cost[srcI][dstI] {
+				cost[srcI][dstI] = bp.Cost
 				next[srcI][dstI] = dstI
-				afMatrix[srcI][dstI] = sl.AF
+				afMatrix[srcI][dstI] = bp.AF
 			}
 		}
 	}

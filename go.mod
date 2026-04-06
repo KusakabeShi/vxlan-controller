@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
 	golang.org/x/net v0.51.0 // indirect

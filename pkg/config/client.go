@@ -20,6 +20,7 @@ type ClientConfigFile struct {
 	NeighSuppress     bool                            `yaml:"neigh_suppress"`
 	AFSettings        map[string]*ClientAFConfigFile   `yaml:"address_families"`
 	InitTimeout       int                             `yaml:"init_timeout"`
+	StatsIntervalS    int                             `yaml:"stats_interval_s"`
 	NTPServers        []string                        `yaml:"ntp_servers"`
 	NTPPeriodH        int                             `yaml:"ntp_period_h"`
 	Filters           *filter.FilterConfigFile         `yaml:"filters"`
@@ -38,6 +39,7 @@ type ClientAFConfigFile struct {
 	VxlanSrcPortStart uint16                          `yaml:"vxlan_src_port_start"`
 	VxlanSrcPortEnd   uint16                          `yaml:"vxlan_src_port_end"`
 	Priority          int                             `yaml:"priority"`
+	AdditionalCost    float64                         `yaml:"additional_cost"`
 	Controllers       []ControllerEndpointFile        `yaml:"controllers"`
 }
 
@@ -54,6 +56,7 @@ type ClientConfig struct {
 	NeighSuppress    bool
 	AFSettings       map[types.AFName]*ClientAFConfig
 	InitTimeout      time.Duration
+	StatsInterval    time.Duration
 	NTPServers       []string
 	NTPPeriod        time.Duration
 	Filters          *filter.FilterConfig
@@ -73,6 +76,7 @@ type ClientAFConfig struct {
 	VxlanSrcPortStart uint16
 	VxlanSrcPortEnd   uint16
 	Priority          int
+	AdditionalCost    float64
 	Controllers       []ControllerEndpoint
 }
 
@@ -98,12 +102,18 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		raw.NTPServers = DefaultNTPServers
 	}
 
+	statsInterval := raw.StatsIntervalS
+	if statsInterval <= 0 {
+		statsInterval = 5
+	}
+
 	cfg := &ClientConfig{
 		BridgeName:       raw.BridgeName,
 		ClampMSSToMTU:    raw.ClampMSSToMTU,
 		NeighSuppress:    raw.NeighSuppress,
 		NTPServers:       raw.NTPServers,
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
+		StatsInterval:    time.Duration(statsInterval) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
 		Filters:          filter.ParseFilterConfigFile(raw.Filters),
 		LogLevel:         raw.LogLevel,
@@ -123,6 +133,10 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 	cfg.AFSettings = make(map[types.AFName]*ClientAFConfig)
 	for name, afRaw := range raw.AFSettings {
 		afName := types.AFName(name)
+		additionalCost := afRaw.AdditionalCost
+		if additionalCost == 0 {
+			additionalCost = 20
+		}
 		af := &ClientAFConfig{
 			Name:              afName,
 			Enable:            afRaw.Enable,
@@ -135,6 +149,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 			VxlanSrcPortStart: afRaw.VxlanSrcPortStart,
 			VxlanSrcPortEnd:   afRaw.VxlanSrcPortEnd,
 			Priority:          afRaw.Priority,
+			AdditionalCost:    additionalCost,
 		}
 
 		af.BindAddr, err = netip.ParseAddr(afRaw.BindAddr)

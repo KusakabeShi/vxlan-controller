@@ -85,7 +85,9 @@ func (c *Client) tapReadLoop() {
 		}
 
 		// Filter outbound multicast (rate limit + Lua)
-		if !c.Filters.OutputMcast.FilterMcast(frame) {
+		accepted, reason := c.Filters.OutputMcast.FilterMcast(frame)
+		c.mcastStats.RecordTx(frame, accepted, reason)
+		if !accepted {
 			continue
 		}
 

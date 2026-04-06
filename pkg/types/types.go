@@ -41,20 +41,18 @@ type Endpoint struct {
 
 // PerClientConfig is the Controller's per-client configuration.
 type PerClientConfig struct {
-	ClientID       ClientID
-	ClientName     string
-	AdditionalCost float64 // default 20
-	Filters        *filter.FilterConfig
+	ClientID   ClientID
+	ClientName string
+	Filters    *filter.FilterConfig
 }
 
 // ClientInfo is maintained by the Controller for each connected Client.
 type ClientInfo struct {
-	ClientID       ClientID
-	ClientName     string
-	Endpoints      map[AFName]*Endpoint
-	LastSeen       time.Time
-	Routes         []Type2Route
-	AdditionalCost float64
+	ClientID   ClientID
+	ClientName string
+	Endpoints  map[AFName]*Endpoint
+	LastSeen   time.Time
+	Routes     []Type2Route
 }
 
 // Type2Route mimics EVPN Type-2 route.
@@ -63,18 +61,64 @@ type Type2Route struct {
 	IP  netip.Addr
 }
 
-// LatencyEntry stores per-AF probe results.
-type LatencyEntry struct {
-	LatencyMean float64
-	LatencyStd  float64
-	PacketLoss  float64
-	Priority    int
+// AFLatency stores probe results for a single AF between two clients.
+type AFLatency struct {
+	Mean           float64
+	Std            float64
+	PacketLoss     float64
+	Priority       int
+	AdditionalCost float64
 }
 
-// SelectedLatency is the chosen latency for LatencyMatrix.
-type SelectedLatency struct {
-	Latency float64
-	AF      AFName
+// LatencyInfo stores all per-AF probe data between a src→dst client pair.
+type LatencyInfo struct {
+	AFs map[AFName]*AFLatency
+}
+
+// BestPath selects the best AF and returns (af, cost).
+// Selection: lowest priority first, then lowest cost (mean + additional_cost).
+// Returns ("", INF_LATENCY) if no AF is reachable.
+func (li *LatencyInfo) BestPath() (AFName, float64) {
+	bestAF := AFName("")
+	bestCost := INF_LATENCY
+	bestPriority := int(1<<31 - 1)
+
+	for af, al := range li.AFs {
+		if al.Mean >= INF_LATENCY {
+			continue
+		}
+		cost := al.Mean + al.AdditionalCost
+		if al.Priority < bestPriority ||
+			(al.Priority == bestPriority && cost < bestCost) {
+			bestPriority = al.Priority
+			bestCost = cost
+			bestAF = af
+		}
+	}
+	return bestAF, bestCost
+}
+
+// BestPathEntry is a precomputed BestPath result.
+type BestPathEntry struct {
+	AF   AFName
+	Cost float64     // mean + additional_cost (used by Floyd-Warshall)
+	Raw  *AFLatency  // full probe data for the selected AF
+}
+
+// ComputeBestPaths precomputes BestPath() for every src→dst pair.
+func ComputeBestPaths(m map[ClientID]map[ClientID]*LatencyInfo) map[ClientID]map[ClientID]*BestPathEntry {
+	result := make(map[ClientID]map[ClientID]*BestPathEntry, len(m))
+	for src, dsts := range m {
+		row := make(map[ClientID]*BestPathEntry, len(dsts))
+		for dst, li := range dsts {
+			af, cost := li.BestPath()
+			if af != "" {
+				row[dst] = &BestPathEntry{AF: af, Cost: cost, Raw: li.AFs[af]}
+			}
+		}
+		result[src] = row
+	}
+	return result
 }
 
 // RouteEntry is a single cell in RouteMatrix.

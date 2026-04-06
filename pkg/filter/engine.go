@@ -67,10 +67,11 @@ func NewFilterEngine(script string, rateCfg *RateLimitConfig) (*FilterEngine, er
 }
 
 // FilterMcast checks rate limit then calls the Lua filter on an Ethernet frame.
-// Returns true if the packet should be accepted.
-func (e *FilterEngine) FilterMcast(frame []byte) bool {
+// Returns (true, "") if accepted, or (false, reason) if rejected.
+// Reason is "rate_limited" for rate limiter, or the string returned by Lua.
+func (e *FilterEngine) FilterMcast(frame []byte) (bool, string) {
 	if len(frame) < 14 {
-		return false
+		return false, "short_frame"
 	}
 
 	// Extract src MAC for rate limiting
@@ -78,7 +79,7 @@ func (e *FilterEngine) FilterMcast(frame []byte) bool {
 
 	// Rate limit check (fast path, no Lua)
 	if e.rl != nil && !e.rl.Allow(srcMAC) {
-		return false
+		return false, "rate_limited"
 	}
 
 	// Build Lua table
@@ -118,27 +119,41 @@ func (e *FilterEngine) FilterRoute(mac string, ip string, isDelete bool) bool {
 	route.RawSetString("ip", lua.LString(ip))
 	route.RawSetString("is_delete", lua.LBool(isDelete))
 
-	return e.callFilter(route)
+	accepted, _ := e.callFilter(route)
+	return accepted
 }
 
 // callFilter invokes the Lua filter function. Must be called with e.mu held.
-func (e *FilterEngine) callFilter(arg *lua.LTable) bool {
+// Lua return values:
+//   - true          → accept
+//   - false / nil   → reject (reason "denied")
+//   - "reason_str"  → reject with specific reason
+func (e *FilterEngine) callFilter(arg *lua.LTable) (bool, string) {
 	if err := e.vm.CallByParam(lua.P{
 		Fn:      e.filterFn,
 		NRet:    1,
 		Protect: true,
 	}, arg); err != nil {
 		vlog.Errorf("[Filter] Lua error: %v", err)
-		return true // fail-open on Lua errors
+		return true, "" // fail-open on Lua errors
 	}
 
 	ret := e.vm.Get(-1)
 	e.vm.Pop(1)
 
-	if b, ok := ret.(lua.LBool); ok {
-		return bool(b)
+	switch v := ret.(type) {
+	case lua.LBool:
+		if bool(v) {
+			return true, ""
+		}
+		return false, "denied"
+	case *lua.LNilType:
+		return false, "denied"
+	case lua.LString:
+		return false, string(v)
+	default:
+		return true, "" // fail-open on unexpected return type
 	}
-	return true // fail-open on unexpected return type
 }
 
 // Close releases the Lua VM.

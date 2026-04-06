@@ -25,6 +25,7 @@ var DefaultClientConfig = ClientConfigFile{
 	ClampMSSToMTU:    false,
 	NeighSuppress:    false,
 	InitTimeout:      10,
+	StatsIntervalS:   5,
 	NTPServers:       DefaultNTPServers,
 	NTPPeriodH:       23,
 	AFSettings: map[string]*ClientAFConfigFile{
@@ -40,6 +41,7 @@ var DefaultClientConfig = ClientConfigFile{
 			VxlanSrcPortStart: 4789,
 			VxlanSrcPortEnd:   4789,
 			Priority:          10,
+			AdditionalCost:    20,
 			Controllers: []ControllerEndpointFile{
 				{PubKey: "<base64 controller pubkey from: wg pubkey>", Addr: "192.168.1.1:5000"},
 			},
@@ -56,6 +58,7 @@ var DefaultClientConfig = ClientConfigFile{
 			VxlanSrcPortStart: 4789,
 			VxlanSrcPortEnd:   4789,
 			Priority:          10,
+			AdditionalCost:    20,
 			Controllers: []ControllerEndpointFile{
 				{PubKey: "<base64 controller pubkey from: wg pubkey>", Addr: "[fd00::1]:5000"},
 			},
@@ -98,9 +101,8 @@ var DefaultControllerConfig = ControllerConfigFile{
 	},
 	AllowedClients: []PerClientConfigFile{
 		{
-			ClientID:       "<base64 client pubkey from: wg pubkey>",
-			ClientName:     "node-1",
-			AdditionalCost: 20,
+			ClientID:   "<base64 client pubkey from: wg pubkey>",
+			ClientName: "node-1",
 		},
 	},
 }

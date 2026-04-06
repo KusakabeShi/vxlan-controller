@@ -16,7 +16,8 @@ import (
 // ControllerState is the global state protected by Controller.mu.
 type ControllerState struct {
 	Clients          map[types.ClientID]*ClientInfo
-	LatencyMatrix    map[types.ClientID]map[types.ClientID]*types.SelectedLatency
+	LatencyMatrix    map[types.ClientID]map[types.ClientID]*types.LatencyInfo
+	BestPaths        map[types.ClientID]map[types.ClientID]*types.BestPathEntry
 	RouteMatrix      map[types.ClientID]map[types.ClientID]*types.RouteEntry
 	RouteTable       []*types.RouteTableEntry
 	LastClientChange time.Time
@@ -24,12 +25,11 @@ type ControllerState struct {
 
 // ClientInfo is maintained for each connected client.
 type ClientInfo struct {
-	ClientID       types.ClientID
-	ClientName     string
-	Endpoints      map[types.AFName]*types.Endpoint
-	LastSeen       time.Time
-	Routes         []types.Type2Route
-	AdditionalCost float64
+	ClientID   types.ClientID
+	ClientName string
+	Endpoints  map[types.AFName]*types.Endpoint
+	LastSeen   time.Time
+	Routes     []types.Type2Route
 }
 
 // QueueItem is the sendqueue element. State and Message are independent;
@@ -68,7 +68,7 @@ func (afc *AFConn) CloseDone() {
 func newControllerState() *ControllerState {
 	return &ControllerState{
 		Clients:       make(map[types.ClientID]*ClientInfo),
-		LatencyMatrix: make(map[types.ClientID]map[types.ClientID]*types.SelectedLatency),
+		LatencyMatrix: make(map[types.ClientID]map[types.ClientID]*types.LatencyInfo),
 		RouteMatrix:   make(map[types.ClientID]map[types.ClientID]*types.RouteEntry),
 	}
 }
@@ -103,11 +103,10 @@ func addrToBytes(a netip.Addr) []byte {
 
 func clientInfoToProto(ci *ClientInfo) *pb.ClientInfoProto {
 	p := &pb.ClientInfoProto{
-		ClientId:       ci.ClientID[:],
-		ClientName:     ci.ClientName,
-		Endpoints:      make(map[string]*pb.EndpointProto),
-		LastSeen:       ci.LastSeen.UnixNano(),
-		AdditionalCost: ci.AdditionalCost,
+		ClientId:   ci.ClientID[:],
+		ClientName: ci.ClientName,
+		Endpoints:  make(map[string]*pb.EndpointProto),
+		LastSeen:   ci.LastSeen.UnixNano(),
 	}
 
 	for af, ep := range ci.Endpoints {
@@ -169,10 +168,9 @@ func routeTableToProto(rt []*types.RouteTableEntry) []*pb.RouteTableEntryProto {
 
 func ProtoToClientInfo(p *pb.ClientInfoProto) *ClientInfo {
 	ci := &ClientInfo{
-		ClientName:     p.ClientName,
-		Endpoints:      make(map[types.AFName]*types.Endpoint),
-		LastSeen:       time.Unix(0, p.LastSeen),
-		AdditionalCost: p.AdditionalCost,
+		ClientName: p.ClientName,
+		Endpoints:  make(map[types.AFName]*types.Endpoint),
+		LastSeen:   time.Unix(0, p.LastSeen),
 	}
 	copy(ci.ClientID[:], p.ClientId)
 

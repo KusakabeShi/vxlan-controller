@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VXLAN Controller</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --bg2: #1a1d27;
+  --bg3: #242836;
+  --border: #2e3348;
+  --text: #e0e0e0;
+  --text2: #8890a0;
+  --accent: #4fc3f7;
+  --green: #66bb6a;
+  --red: #ef5350;
+  --yellow: #ffa726;
+  --font: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text2);
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+}
+.status-dot.disconnected { background: var(--red); }
+.container {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  padding: 16px 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text2);
+}
+.panel-body { padding: 16px; }
+
+/* Topology SVG */
+#topology-svg {
+  width: 100%;
+  height: 300px;
+  display: block;
+}
+.topo-link { stroke: var(--border); stroke-width: 2; }
+.topo-link.active { stroke: var(--accent); stroke-width: 2; }
+.topo-node { cursor: pointer; }
+.topo-node circle {
+  fill: var(--bg3);
+  stroke: var(--green);
+  stroke-width: 2;
+  r: 24;
+  transition: stroke 0.2s;
+}
+.topo-node circle.offline { stroke: var(--red); }
+.topo-node circle:hover { stroke: var(--accent); }
+.topo-node.selected circle { stroke: var(--accent); fill: #1a3a4a; }
+.topo-node text {
+  fill: var(--text);
+  font-size: 11px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.topo-label {
+  fill: var(--text2);
+  font-size: 10px;
+  text-anchor: middle;
+}
+.topo-link-label {
+  fill: var(--text2);
+  font-size: 9px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+/* Site detail (expanded on click) */
+.site-detail {
+  display: none;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.site-detail.open { display: block; }
+.site-detail h3 {
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text2);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--bg3); }
+
+/* Latency heatmap */
+.lat-cell {
+  text-align: center;
+  min-width: 60px;
+}
+.lat-good { color: var(--green); }
+.lat-med  { color: var(--yellow); }
+.lat-bad  { color: var(--red); }
+
+/* Filter input */
+.filter-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font);
+  outline: none;
+  width: 160px;
+}
+.filter-input:focus { border-color: var(--accent); }
+
+/* Rate bar */
+.rate-bar {
+  display: inline-block;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: 0.7;
+  min-width: 2px;
+  max-width: 80px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+/* Responsive */
+@media (min-width: 900px) {
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>VXLAN Controller</h1>
+  <div class="status-badge">
+    <div class="status-dot" id="ws-dot"></div>
+    <span id="ws-status">connecting...</span>
+    <span id="site-count"></span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Topology -->
+  <div class="panel">
+    <div class="panel-header">Site Topology</div>
+    <div class="panel-body" style="padding:8px;">
+      <svg id="topology-svg"></svg>
+    </div>
+    <div class="site-detail" id="site-detail">
+      <h3 id="site-detail-title"></h3>
+      <table id="site-detail-table">
+        <thead><tr><th>MAC</th><th>IP</th><th>Mcast</th><th>Reject Detail</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="bottom-grid">
+    <!-- Route Table -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Route Table</span>
+        <input class="filter-input" id="route-filter" placeholder="filter..." />
+      </div>
+      <div class="panel-body" style="padding:0;max-height:300px;overflow-y:auto;">
+        <table id="route-table">
+          <thead><tr><th>MAC</th><th>IP</th><th>Owner</th><th>Mcast</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Latency Matrix -->
+    <div class="panel">
+      <div class="panel-header">Latency Matrix (ms)</div>
+      <div class="panel-body" style="padding:0;overflow-x:auto;">
+        <table id="latency-table"></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  let state = null;
+  let selectedSite = null;
+  let ws = null;
+  let reconnectTimer = null;
+
+  // --- WebSocket ---
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + location.pathname.replace(/\/+$/, '') + '/ws';
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      document.getElementById('ws-dot').className = 'status-dot';
+      document.getElementById('ws-status').textContent = 'connected';
+    };
+    ws.onclose = () => {
+      document.getElementById('ws-dot').className = 'status-dot disconnected';
+      document.getElementById('ws-status').textContent = 'reconnecting...';
+      reconnectTimer = setTimeout(connectWS, 2000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (e) => {
+      try {
+        state = JSON.parse(e.data);
+        render();
+      } catch(err) { console.error('parse error', err); }
+    };
+  }
+
+  // --- Helpers ---
+  function alias(mac) {
+    if (!state || !state.config || !state.config.mac_aliases) return mac;
+    const a = state.config.mac_aliases[mac];
+    return a ? a + ' (' + shortMAC(mac) + ')' : mac;
+  }
+  function shortMAC(mac) {
+    const p = mac.split(':');
+    return p[p.length-2] + ':' + p[p.length-1];
+  }
+  function nodeName(id) {
+    if (!state) return id.substring(0, 8);
+    const c = state.clients.find(c => c.id === id);
+    return c ? c.name : id.substring(0, 8);
+  }
+  function nodeLabel(name) {
+    if (!state || !state.config || !state.config.nodes) return name;
+    const n = state.config.nodes[name];
+    return n && n.label ? n.label : name;
+  }
+  // Get mcast stats for a MAC across all sites, or within a specific site
+  function getMcastStats(mac, siteName) {
+    if (!state || !state.mcast_stats) return null;
+    if (siteName) {
+      const siteStats = state.mcast_stats[siteName];
+      if (!siteStats) return null;
+      return siteStats.find(s => s.mac === mac) || null;
+    }
+    // Aggregate across all sites
+    let total = null;
+    for (const [, stats] of Object.entries(state.mcast_stats)) {
+      const s = stats.find(s => s.mac === mac);
+      if (s) {
+        if (!total) total = {tx_accepted:0, tx_rejected:0, rx_accepted:0, rx_rejected:0, reject_reasons:[]};
+        total.tx_accepted += s.tx_accepted;
+        total.tx_rejected += s.tx_rejected;
+        total.rx_accepted += s.rx_accepted;
+        total.rx_rejected += s.rx_rejected;
+        if (s.reject_reasons) total.reject_reasons = total.reject_reasons.concat(s.reject_reasons);
+      }
+    }
+    return total;
+  }
+  function rateText(stats) {
+    if (!stats) return '-';
+    const tx = stats.tx_accepted + stats.tx_rejected;
+    const rx = stats.rx_accepted + stats.rx_rejected;
+    let text = 'tx:' + tx + ' rx:' + rx;
+    if (stats.tx_rejected > 0) text += ' <span style="color:var(--red)">rej:' + stats.tx_rejected + '</span>';
+    return text;
+  }
+  function rejectDetail(stats) {
+    if (!stats || !stats.reject_reasons || stats.reject_reasons.length === 0) return '';
+    return stats.reject_reasons.map(r => r.direction + ':' + r.reason + '=' + r.count).join(', ');
+  }
+  function latClass(ms) {
+    if (ms < 10) return 'lat-good';
+    if (ms < 50) return 'lat-med';
+    return 'lat-bad';
+  }
+
+  // --- Render ---
+  function render() {
+    if (!state) return;
+
+    const onlineCount = state.clients.filter(c => c.online).length;
+    document.getElementById('site-count').textContent =
+      onlineCount + '/' + state.clients.length + ' sites';
+
+    renderTopology();
+    renderRouteTable();
+    renderLatencyMatrix();
+    if (selectedSite) renderSiteDetail(selectedSite);
+  }
+
+  // --- Topology SVG ---
+  function renderTopology() {
+    const svg = document.getElementById('topology-svg');
+    const rect = svg.getBoundingClientRect();
+    const W = rect.width || 800;
+    const H = 300;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    const nodes = state.clients.map(c => {
+      let x = W/2, y = H/2;
+      if (state.config && state.config.nodes && state.config.nodes[c.name]) {
+        const n = state.config.nodes[c.name];
+        x = n.pos[0];
+        y = n.pos[1];
+      }
+      return { id: c.id, name: c.name, online: c.online, rawX: x, rawY: y };
+    });
+
+    // Auto-scale positions
+    if (nodes.length > 0) {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      nodes.forEach(n => {
+        if (n.rawX < minX) minX = n.rawX;
+        if (n.rawX > maxX) maxX = n.rawX;
+        if (n.rawY < minY) minY = n.rawY;
+        if (n.rawY > maxY) maxY = n.rawY;
+      });
+      const pad = 60;
+      const rangeX = maxX - minX || 1;
+      const rangeY = maxY - minY || 1;
+      nodes.forEach(n => {
+        n.x = pad + ((n.rawX - minX) / rangeX) * (W - 2*pad);
+        n.y = pad + ((n.rawY - minY) / rangeY) * (H - 2*pad);
+      });
+      // Single node: center it
+      if (nodes.length === 1) {
+        nodes[0].x = W/2;
+        nodes[0].y = H/2;
+      }
+    }
+
+    const nodeMap = {};
+    nodes.forEach(n => nodeMap[n.id] = n);
+
+    // Build links from route matrix
+    const links = [];
+    const linkSet = new Set();
+    if (state.route_matrix) {
+      state.route_matrix.forEach(row => {
+        const src = row.src;
+        (row.entries || []).forEach(e => {
+          const key = [src, e.dst].sort().join('-');
+          if (!linkSet.has(key) && nodeMap[src] && nodeMap[e.dst]) {
+            linkSet.add(key);
+            links.push({
+              src: nodeMap[src], dst: nodeMap[e.dst],
+              af: e.af, latency: getLatency(src, e.dst)
+            });
+          }
+        });
+      });
+    }
+
+    let html = '';
+
+    // Links
+    links.forEach(l => {
+      const cls = 'topo-link active';
+      html += '<line class="' + cls + '" x1="' + l.src.x + '" y1="' + l.src.y +
+              '" x2="' + l.dst.x + '" y2="' + l.dst.y + '"/>';
+      // Label on link
+      const mx = (l.src.x + l.dst.x)/2;
+      const my = (l.src.y + l.dst.y)/2;
+      let label = l.af;
+      if (l.latency > 0) label += ' ' + l.latency.toFixed(1) + 'ms';
+      html += '<text class="topo-link-label" x="' + mx + '" y="' + (my - 6) + '">' + label + '</text>';
+    });
+
+    // Nodes
+    nodes.forEach(n => {
+      const sel = selectedSite === n.name ? ' selected' : '';
+      const offCls = n.online ? '' : ' offline';
+      html += '<g class="topo-node' + sel + '" data-name="' + n.name + '">';
+      html += '<circle cx="' + n.x + '" cy="' + n.y + '" class="' + offCls + '"/>';
+      html += '<text x="' + n.x + '" y="' + n.y + '">' + nodeLabel(n.name) + '</text>';
+      html += '</g>';
+    });
+
+    svg.innerHTML = html;
+
+    // Click handlers
+    svg.querySelectorAll('.topo-node').forEach(g => {
+      g.addEventListener('click', () => {
+        const name = g.dataset.name;
+        if (selectedSite === name) {
+          selectedSite = null;
+          document.getElementById('site-detail').classList.remove('open');
+        } else {
+          selectedSite = name;
+          renderSiteDetail(name);
+          document.getElementById('site-detail').classList.add('open');
+        }
+        renderTopology(); // re-render for selection highlight
+      });
+    });
+  }
+
+  function getLatency(srcId, dstId) {
+    if (!state.latency_matrix) return 0;
+    for (const row of state.latency_matrix) {
+      if (row.src === srcId) {
+        for (const e of (row.entries || [])) {
+          if (e.dst === dstId) return e.latency;
+        }
+      }
+    }
+    return 0;
+  }
+
+  // --- Site Detail ---
+  function renderSiteDetail(name) {
+    const client = state.clients.find(c => c.name === name);
+    if (!client) return;
+
+    const title = document.getElementById('site-detail-title');
+    title.textContent = nodeLabel(name) + (name !== nodeLabel(name) ? ' (' + name + ')' : '') +
+      (client.online ? '' : ' [offline]');
+
+    const tbody = document.querySelector('#site-detail-table tbody');
+    let html = '';
+    (client.routes || []).forEach(r => {
+      const stats = getMcastStats(r.mac, client.name);
+      html += '<tr><td>' + alias(r.mac) + '</td><td>' + (r.ip || '-') +
+        '</td><td>' + rateText(stats) + '</td><td style="color:var(--text2);font-size:11px">' + rejectDetail(stats) + '</td></tr>';
+    });
+    if (!client.routes || client.routes.length === 0) {
+      html = '<tr><td colspan="4" style="color:var(--text2)">no routes</td></tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
+  // --- Route Table ---
+  function renderRouteTable() {
+    const filter = (document.getElementById('route-filter').value || '').toLowerCase();
+    const tbody = document.querySelector('#route-table tbody');
+    let html = '';
+    (state.route_table || []).forEach(r => {
+      const ownerNames = Object.keys(r.owners || {}).map(id => nodeName(id)).join(', ');
+      const macStr = alias(r.mac);
+      const ipStr = r.ip || '-';
+      if (filter && !(macStr + ' ' + ipStr + ' ' + ownerNames).toLowerCase().includes(filter)) return;
+      const stats = getMcastStats(r.mac);
+      html += '<tr><td>' + macStr + '</td><td>' + ipStr + '</td><td>' + ownerNames + '</td><td>' + rateText(stats) + '</td></tr>';
+    });
+    if (!html) html = '<tr><td colspan="4" style="color:var(--text2)">no routes</td></tr>';
+    tbody.innerHTML = html;
+  }
+
+  // --- Latency Matrix ---
+  function renderLatencyMatrix() {
+    const table = document.getElementById('latency-table');
+    const clients = state.clients || [];
+    if (clients.length === 0) {
+      table.innerHTML = '<tr><td style="color:var(--text2);padding:10px">no clients</td></tr>';
+      return;
+    }
+
+    // Build lookup
+    const latMap = {};
+    (state.latency_matrix || []).forEach(row => {
+      (row.entries || []).forEach(e => {
+        latMap[row.src + '|' + e.dst] = e;
+      });
+    });
+
+    let html = '<thead><tr><th></th>';
+    clients.forEach(c => {
+      html += '<th class="lat-cell">' + nodeLabel(c.name) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    clients.forEach(src => {
+      html += '<tr><th style="text-align:right;padding-right:10px">' + nodeLabel(src.name) + '</th>';
+      clients.forEach(dst => {
+        if (src.id === dst.id) {
+          html += '<td class="lat-cell" style="color:var(--text2)">-</td>';
+        } else {
+          const e = latMap[src.id + '|' + dst.id];
+          if (e && e.latency > 0 && e.latency < 1e15) {
+            html += '<td class="lat-cell ' + latClass(e.latency) + '">' + e.latency.toFixed(1) + '</td>';
+          } else {
+            html += '<td class="lat-cell" style="color:var(--text2)">?</td>';
+          }
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody>';
+    table.innerHTML = html;
+  }
+
+  // --- Init ---
+  document.getElementById('route-filter').addEventListener('input', () => {
+    if (state) renderRouteTable();
+  });
+
+  connectWS();
+})();
+</script>
+</body>
+</html>

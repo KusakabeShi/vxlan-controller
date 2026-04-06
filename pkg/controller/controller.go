@@ -65,6 +65,9 @@ type Controller struct {
 
 	// Allowed public keys for handshake verification
 	allowedKeys [][32]byte
+
+	// Client-reported multicast stats for WebUI
+	clientMcastStats map[types.ClientID]*ClientMcastStats
 }
 
 type udpAddrKey struct {
@@ -93,10 +96,11 @@ func New(cfg *config.ControllerConfig) *Controller {
 		State:        newControllerState(),
 		afListeners:  make(map[types.AFName]*AFListener),
 		clients:      make(map[types.ClientID]*ClientConn),
-		udpSessions:  crypto.NewSessionManager(),
-		udpAddrs:     make(map[udpAddrKey]*net.UDPAddr),
-		ctx:          ctx,
-		cancel:       cancel,
+		udpSessions:      crypto.NewSessionManager(),
+		udpAddrs:         make(map[udpAddrKey]*net.UDPAddr),
+		clientMcastStats: make(map[types.ClientID]*ClientMcastStats),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// Build allowed keys list
@@ -125,6 +129,9 @@ func (c *Controller) Run() error {
 
 	// Start periodic probe timer
 	go c.periodicProbeLoop()
+
+	// Start web UI if configured
+	c.startWebUI()
 
 	<-c.ctx.Done()
 	return nil
@@ -277,10 +284,9 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 			ClientID:  clientID,
 			Endpoints: make(map[types.AFName]*types.Endpoint),
 		}
-		// Look up AdditionalCost and ClientName from config
+		// Look up ClientName from config
 		for _, pc := range c.Config.AllowedClients {
 			if pc.ClientID == clientID {
-				ci.AdditionalCost = pc.AdditionalCost
 				ci.ClientName = pc.ClientName
 				break
 			}
@@ -443,6 +449,8 @@ func (c *Controller) tcpRecvLoop(cc *ClientConn, afc *AFConn, session *crypto.Se
 			c.handleMACUpdate(cc, payload)
 		case protocol.MsgProbeResults:
 			c.handleProbeResults(cc, payload)
+		case protocol.MsgMcastStatsReport:
+			c.handleMcastStatsReport(cc, payload)
 		default:
 			vlog.Infof("[Controller] unknown msg_type %d from %s", msgType, cc.ClientID.Hex()[:8])
 		}
@@ -543,7 +551,7 @@ func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 
 	// Ensure src row exists
 	if c.State.LatencyMatrix[srcID] == nil {
-		c.State.LatencyMatrix[srcID] = make(map[types.ClientID]*types.SelectedLatency)
+		c.State.LatencyMatrix[srcID] = make(map[types.ClientID]*types.LatencyInfo)
 	}
 
 	for dstHex, entry := range results.Results {
@@ -552,29 +560,19 @@ func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 			continue
 		}
 
-		// Select best AF: lowest priority, then lowest latency_mean
-		var bestAF types.AFName
-		bestLatency := types.INF_LATENCY
-		bestPriority := int32(1<<31 - 1)
-
+		li := &types.LatencyInfo{
+			AFs: make(map[types.AFName]*types.AFLatency),
+		}
 		for afStr, afResult := range entry.AfResults {
-			if afResult.LatencyMean >= types.INF_LATENCY {
-				continue
-			}
-			if afResult.Priority < bestPriority ||
-				(afResult.Priority == bestPriority && afResult.LatencyMean < bestLatency) {
-				bestPriority = afResult.Priority
-				bestLatency = afResult.LatencyMean
-				bestAF = types.AFName(afStr)
+			li.AFs[types.AFName(afStr)] = &types.AFLatency{
+				Mean:           afResult.LatencyMean,
+				Std:            afResult.LatencyStd,
+				PacketLoss:     afResult.PacketLoss,
+				Priority:       int(afResult.Priority),
+				AdditionalCost: afResult.AdditionalCost,
 			}
 		}
-
-		if bestAF != "" {
-			c.State.LatencyMatrix[srcID][dstID] = &types.SelectedLatency{
-				Latency: bestLatency,
-				AF:      bestAF,
-			}
-		}
+		c.State.LatencyMatrix[srcID][dstID] = li
 	}
 
 	// Reset topology update debounce
@@ -673,16 +671,17 @@ func (c *Controller) triggerTopologyUpdate() {
 		c.topoTimer = nil
 	}
 
-	// Compute new RouteMatrix
-	newRM := computeRouteMatrix(c.State.LatencyMatrix, c.State.Clients)
+	// Precompute best paths, then run Floyd-Warshall
+	c.State.BestPaths = types.ComputeBestPaths(c.State.LatencyMatrix)
+	newRM := computeRouteMatrix(c.State.BestPaths, c.State.Clients)
 	c.State.RouteMatrix = newRM
 
 	vlog.Debugf("[Controller] topology update: RouteMatrix recomputed (%d clients, %d latency sources)", len(c.State.Clients), len(c.State.LatencyMatrix))
 
-	// Log LatencyMatrix and RouteMatrix for debugging
-	for src, dsts := range c.State.LatencyMatrix {
-		for dst, sl := range dsts {
-			vlog.Verbosef("[Controller] LatencyMatrix: %s -> %s: lat=%.2f af=%s", src.Hex()[:8], dst.Hex()[:8], sl.Latency, sl.AF)
+	// Log best paths and RouteMatrix for debugging
+	for src, dsts := range c.State.BestPaths {
+		for dst, bp := range dsts {
+			vlog.Verbosef("[Controller] BestPath: %s -> %s: cost=%.2f af=%s", src.Hex()[:8], dst.Hex()[:8], bp.Cost, bp.AF)
 		}
 	}
 	for src, dsts := range newRM {
@@ -853,7 +852,8 @@ func (c *Controller) checkOfflineClients() {
 		c.updateRouteTable()
 
 		// Recompute routes
-		newRM := computeRouteMatrix(c.State.LatencyMatrix, c.State.Clients)
+		c.State.BestPaths = types.ComputeBestPaths(c.State.LatencyMatrix)
+		newRM := computeRouteMatrix(c.State.BestPaths, c.State.Clients)
 		c.State.RouteMatrix = newRM
 
 		c.pushDelta(&pb.ControllerStateUpdate{
@@ -1014,7 +1014,7 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 
 	// Input filter: check source client's filter
 	if srcCC, ok := c.clients[srcID]; ok && srcCC.Filters != nil {
-		if !srcCC.Filters.InputMcast.FilterMcast(fwd.Payload) {
+		if accepted, _ := srcCC.Filters.InputMcast.FilterMcast(fwd.Payload); !accepted {
 			return
 		}
 	}
@@ -1041,8 +1041,10 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 			}
 
 			// Output filter: check destination client's filter
-			if cc.Filters != nil && !cc.Filters.OutputMcast.FilterMcast(fwd.Payload) {
-				continue
+			if cc.Filters != nil {
+				if accepted, _ := cc.Filters.OutputMcast.FilterMcast(fwd.Payload); !accepted {
+					continue
+				}
 			}
 
 			session := listener.UDPSessions.FindByPeer(clientID)

@@ -278,22 +278,22 @@ address_families:
 allowed_clients:
   - client_id: "${PUB_1}"
     client_name: "node-1"
-    additional_cost: 20
+
   - client_id: "${PUB_2}"
     client_name: "node-2"
-    additional_cost: 20
+
   - client_id: "${PUB_3}"
     client_name: "node-3"
-    additional_cost: 20
+
   - client_id: "${PUB_4}"
     client_name: "node-4"
-    additional_cost: 20
+
   - client_id: "${PUB_5}"
     client_name: "node-5"
-    additional_cost: 20
+
   - client_id: "${PUB_6}"
     client_name: "node-6"
-    additional_cost: 20
+
 YAML
     echo "$f"
 }

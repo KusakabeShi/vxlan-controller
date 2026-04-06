@@ -324,13 +324,13 @@ address_families:
 allowed_clients:
   - client_id: "${PUB_A}"
     client_name: "node-a"
-    additional_cost: 0
+
   - client_id: "${PUB_B}"
     client_name: "node-b"
-    additional_cost: 0
+
   - client_id: "${PUB_C}"
     client_name: "node-c"
-    additional_cost: 0
+
 YAML
 
 echo "=== Writing client configs ==="

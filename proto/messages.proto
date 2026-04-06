@@ -42,7 +42,7 @@ message ClientInfoProto {
   map<string, EndpointProto> endpoints = 2; // key = af_name
   int64 last_seen = 3;
   repeated Type2Route routes = 4;
-  double additional_cost = 5;
+  double additional_cost = 5; // deprecated, kept for wire compat
   string client_name = 6;
 }
 
@@ -129,6 +129,7 @@ message AFProbeResult {
   double latency_std = 2;
   double packet_loss = 3;
   int32 priority = 4;
+  double additional_cost = 5; // cost of transiting through this node via this AF
 }
 
 // Probe channel messages (serialized, then encrypted)
@@ -141,6 +142,26 @@ message ProbeResponse {
   uint64 probe_id = 1;
   int64 dst_timestamp = 2; // unix nano
   int64 src_timestamp = 3; // echo back sender's src_timestamp
+}
+
+// Client → Controller: periodic multicast stats
+message McastStatsReport {
+  repeated MACMcastStats mac_stats = 1;
+}
+
+message MACMcastStats {
+  bytes mac = 1;          // 6 bytes src MAC
+  uint64 tx_accepted = 2; // outbound accepted
+  uint64 tx_rejected = 3; // outbound rejected (sum of all reasons)
+  uint64 rx_accepted = 4; // inbound accepted
+  uint64 rx_rejected = 5; // inbound rejected (sum of all reasons)
+  repeated McastRejectReason reject_reasons = 6; // per-reason breakdown
+}
+
+message McastRejectReason {
+  string direction = 1; // "tx" or "rx"
+  string reason = 2;    // e.g. "rate_limited", "dhcp", "ospf"
+  uint64 count = 3;
 }
 
 // Broadcast relay
