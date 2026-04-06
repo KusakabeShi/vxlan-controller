@@ -1,12 +1,13 @@
 package ntp
 
 import (
-	"log"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/beevik/ntp"
+
+	"vxlan-controller/pkg/vlog"
 )
 
 // TimeSync manages NTP time offset correction.
@@ -27,18 +28,18 @@ func (ts *TimeSync) Sync() error {
 	for _, server := range ts.servers {
 		resp, err := ntp.Query(server)
 		if err != nil {
-			log.Printf("[NTP] query %s failed: %v", server, err)
+			vlog.Warnf("[NTP] query %s failed: %v", server, err)
 			continue
 		}
 		if err := resp.Validate(); err != nil {
-			log.Printf("[NTP] validate %s failed: %v", server, err)
+			vlog.Warnf("[NTP] validate %s failed: %v", server, err)
 			continue
 		}
 		offsets = append(offsets, resp.ClockOffset)
 	}
 
 	if len(offsets) == 0 {
-		log.Printf("[NTP] no servers responded, keeping current offset")
+		vlog.Warnf("[NTP] no servers responded, keeping current offset")
 		return nil
 	}
 
@@ -64,7 +65,7 @@ func (ts *TimeSync) Sync() error {
 	ts.offset = avg
 	ts.mu.Unlock()
 
-	log.Printf("[NTP] synced: %d/%d servers responded, offset=%v (used %d after trim)",
+	vlog.Debugf("[NTP] synced: %d/%d servers responded, offset=%v (used %d after trim)",
 		len(offsets), len(ts.servers), avg, len(trimmed))
 	return nil
 }

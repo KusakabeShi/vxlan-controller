@@ -3,13 +3,14 @@ package filter
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
 	"sync"
 
 	lua "github.com/yuin/gopher-lua"
+
+	"vxlan-controller/pkg/vlog"
 )
 
 // FilterEngine wraps a Lua VM and optional rate limiter for one filter hook.
@@ -127,7 +128,7 @@ func (e *FilterEngine) callFilter(arg *lua.LTable) bool {
 		NRet:    1,
 		Protect: true,
 	}, arg); err != nil {
-		log.Printf("[Filter] Lua error: %v", err)
+		vlog.Errorf("[Filter] Lua error: %v", err)
 		return true // fail-open on Lua errors
 	}
 

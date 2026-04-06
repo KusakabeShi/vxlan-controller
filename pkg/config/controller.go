@@ -23,6 +23,7 @@ type ControllerConfigFile struct {
 	TopologyUpdateDebounceMax int                              `yaml:"topology_update_debounce_max"`
 	Probing                ProbingConfigFile                   `yaml:"probing"`
 	AllowedClients         []PerClientConfigFile               `yaml:"allowed_clients"`
+	LogLevel               string                             `yaml:"log_level"`
 }
 
 type ControllerAFConfigFile struct {
@@ -60,6 +61,7 @@ type ControllerConfig struct {
 	TopologyUpdateDebounceMax time.Duration
 	Probing                   ProbingConfig
 	AllowedClients            []types.PerClientConfig
+	LogLevel                  string
 }
 
 type ControllerAFConfig struct {
@@ -100,6 +102,7 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 		SyncNewClientDebounceMax:  time.Duration(raw.SyncNewClientDebounceMax) * time.Second,
 		TopologyUpdateDebounce:    time.Duration(raw.TopologyUpdateDebounce) * time.Second,
 		TopologyUpdateDebounceMax: time.Duration(raw.TopologyUpdateDebounceMax) * time.Second,
+		LogLevel:                  raw.LogLevel,
 		Probing: ProbingConfig{
 			ProbeIntervalS:    raw.Probing.ProbeIntervalS,
 			ProbeTimes:        raw.Probing.ProbeTimes,

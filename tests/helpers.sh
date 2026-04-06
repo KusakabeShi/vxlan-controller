@@ -307,7 +307,7 @@ generate_all_configs() {
 # =========================================
 start_process() {
     local ns=$1 binary=$2 config=$3 logname=$4
-    ip netns exec "$ns" "$PROJECT_DIR/$binary" -config "$config" > "$TMPDIR/${logname}.log" 2>&1 &
+    ip netns exec "$ns" "$PROJECT_DIR/$binary" -config "$config" -log-level verbose > "$TMPDIR/${logname}.log" 2>&1 &
     local pid=$!
     CLEANUP_PIDS+=("$pid")
     echo "  $logname started (PID=$pid)"

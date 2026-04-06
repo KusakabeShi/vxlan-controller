@@ -1,7 +1,7 @@
 package client
 
 import (
-	"log"
+	"vxlan-controller/pkg/vlog"
 	"net"
 	"os"
 	"unsafe"
@@ -49,7 +49,7 @@ func (c *Client) tapReadLoop() {
 
 	buf := make([]byte, 65536)
 
-	log.Printf("[Client] tapReadLoop started, fd=%v", c.TapFD.Fd())
+	vlog.Debugf("[Client] tapReadLoop started, fd=%v", c.TapFD.Fd())
 
 	for {
 		select {
@@ -64,17 +64,17 @@ func (c *Client) tapReadLoop() {
 			case <-c.ctx.Done():
 				return
 			default:
-				log.Printf("[Client] tap read error: %v", err)
+				vlog.Errorf("[Client] tap read error: %v", err)
 				continue
 			}
 		}
 
 		if n < 14 {
-			log.Printf("[Client] tap: short frame (%d bytes)", n)
+			vlog.Verbosef("[Client] tap: short frame (%d bytes)", n)
 			continue
 		}
 
-		log.Printf("[Client] tap: read %d bytes, dst=%02x:%02x:%02x:%02x:%02x:%02x", n, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
+		vlog.Verbosef("[Client] tap: read %d bytes, dst=%02x:%02x:%02x:%02x:%02x:%02x", n, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
 
 		frame := make([]byte, n)
 		copy(frame, buf[:n])
@@ -100,34 +100,34 @@ func (c *Client) forwardBroadcast(frame []byte) {
 	}
 	data, err := proto.Marshal(fwd)
 	if err != nil {
-		log.Printf("[Client] broadcast: marshal error: %v", err)
+		vlog.Errorf("[Client] broadcast: marshal error: %v", err)
 		return
 	}
-	log.Printf("[Client] broadcast: forwarding %d byte frame", len(frame))
+	vlog.Debugf("[Client] broadcast: forwarding %d byte frame", len(frame))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.AuthorityCtrl == nil {
-		log.Printf("[Client] broadcast: no authority controller")
+		vlog.Verbosef("[Client] broadcast: no authority controller")
 		return
 	}
 
 	cc, ok := c.Controllers[*c.AuthorityCtrl]
 	if !ok || cc.ActiveAF == "" {
-		log.Printf("[Client] broadcast: authority not connected (ok=%v, activeAF=%q)", ok, cc.ActiveAF)
+		vlog.Verbosef("[Client] broadcast: authority not connected (ok=%v, activeAF=%q)", ok, cc.ActiveAF)
 		return
 	}
 
 	afCfg, ok := c.Config.AFSettings[cc.ActiveAF]
 	if !ok {
-		log.Printf("[Client] broadcast: no AF config for %s", cc.ActiveAF)
+		vlog.Verbosef("[Client] broadcast: no AF config for %s", cc.ActiveAF)
 		return
 	}
 
 	afc, ok := cc.AFConns[cc.ActiveAF]
 	if !ok || afc.UDPSession == nil || afc.CommUDPConn == nil {
-		log.Printf("[Client] broadcast: no AF conn (ok=%v, udp=%v, comm=%v)", ok, afc.UDPSession != nil, afc.CommUDPConn != nil)
+		vlog.Verbosef("[Client] broadcast: no AF conn (ok=%v, udp=%v, comm=%v)", ok, afc.UDPSession != nil, afc.CommUDPConn != nil)
 		return
 	}
 
@@ -138,12 +138,12 @@ func (c *Client) forwardBroadcast(frame []byte) {
 				Port: int(ctrl.Addr.Port()),
 			}
 			if err := protocol.WriteUDPPacket(afc.CommUDPConn, addr, afc.UDPSession, protocol.MsgMulticastForward, data); err != nil {
-				log.Printf("[Client] broadcast: write UDP error: %v", err)
+				vlog.Errorf("[Client] broadcast: write UDP error: %v", err)
 			}
 			return
 		}
 	}
-	log.Printf("[Client] broadcast: authority %s not found in AF %s controllers", c.AuthorityCtrl.Hex()[:8], cc.ActiveAF)
+	vlog.Verbosef("[Client] broadcast: authority %s not found in AF %s controllers", c.AuthorityCtrl.Hex()[:8], cc.ActiveAF)
 }
 
 // tapWriteLoop receives broadcast frames from the controller and injects into bridge.
@@ -156,7 +156,7 @@ func (c *Client) tapWriteLoop() {
 		select {
 		case frame := <-c.tapInjectCh:
 			if _, err := c.TapFD.Write(frame); err != nil {
-				log.Printf("[Client] tap write error: %v", err)
+				vlog.Errorf("[Client] tap write error: %v", err)
 			}
 		case <-c.ctx.Done():
 			return

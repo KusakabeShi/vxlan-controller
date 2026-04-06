@@ -2,10 +2,10 @@ package client
 
 import (
 	"bytes"
-	"log"
 	"net"
 
 	"vxlan-controller/pkg/types"
+	"vxlan-controller/pkg/vlog"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -54,7 +54,7 @@ func (c *Client) reconcileFDB() {
 
 	view := cc.State
 
-	log.Printf("[Client] FDB reconcile: RouteMatrix=%d rows, RouteTable=%d entries, Clients=%d",
+	vlog.Debugf("[Client] FDB reconcile: RouteMatrix=%d rows, RouteTable=%d entries, Clients=%d",
 		len(view.RouteMatrix), len(view.RouteTable), len(view.Clients))
 
 	// Helper to resolve client name
@@ -68,17 +68,17 @@ func (c *Client) reconcileFDB() {
 	// Log all client endpoints for debugging
 	for cid, ci := range view.Clients {
 		for af, ep := range ci.Endpoints {
-			log.Printf("[Client] FDB debug: client %s(%s) af=%s endpoint=%s", nameOf(cid), cid.Hex()[:8], af, ep.IP)
+			vlog.Verbosef("[Client] FDB debug: client %s(%s) af=%s endpoint=%s", nameOf(cid), cid.Hex()[:8], af, ep.IP)
 		}
 	}
 
 	// Log my routes for debugging
 	if myRoutes, ok := view.RouteMatrix[c.ClientID]; ok {
 		for dst, re := range myRoutes {
-			log.Printf("[Client] FDB route: me -> %s nextHop=%s af=%s", nameOf(dst), nameOf(re.NextHop), re.AF)
+			vlog.Verbosef("[Client] FDB route: me -> %s nextHop=%s af=%s", nameOf(dst), nameOf(re.NextHop), re.AF)
 		}
 	} else {
-		log.Printf("[Client] FDB route: no routes for my ID %s in RouteMatrix", c.ClientID.Hex()[:8])
+		vlog.Verbosef("[Client] FDB route: no routes for my ID %s in RouteMatrix", c.ClientID.Hex()[:8])
 	}
 
 	desiredFDB := make(map[fdbKey]fdbEntry)
@@ -242,7 +242,7 @@ func (c *Client) addFDBEntry(key fdbKey, entry fdbEntry) {
 
 	link, err := netlink.LinkByName(entry.DevName)
 	if err != nil {
-		log.Printf("[Client] FDB add: link %s not found: %v", entry.DevName, err)
+		vlog.Errorf("[Client] FDB add: link %s not found: %v", entry.DevName, err)
 		return
 	}
 	linkIdx := link.Attrs().Index
@@ -257,7 +257,7 @@ func (c *Client) addFDBEntry(key fdbKey, entry fdbEntry) {
 		IP:           entry.DstIP,
 	}
 	if err := netlink.NeighAppend(selfNeigh); err != nil {
-		log.Printf("[Client] FDB self append %s -> %s via %s: %v", key.MAC, entry.DstIP, entry.DevName, err)
+		vlog.Errorf("[Client] FDB self append %s -> %s via %s: %v", key.MAC, entry.DstIP, entry.DevName, err)
 	}
 
 	// master: tells bridge to forward to vxlan port (avoids unknown unicast flooding).
@@ -271,10 +271,10 @@ func (c *Client) addFDBEntry(key fdbKey, entry fdbEntry) {
 		HardwareAddr: mac,
 	}
 	if err := netlink.NeighAppend(masterNeigh); err != nil {
-		log.Printf("[Client] FDB master append %s via %s: %v", key.MAC, entry.DevName, err)
+		vlog.Errorf("[Client] FDB master append %s via %s: %v", key.MAC, entry.DevName, err)
 	}
 
-	log.Printf("[Client] FDB added %s -> %s via %s", key.MAC, entry.DstIP, entry.DevName)
+	vlog.Debugf("[Client] FDB added %s -> %s via %s", key.MAC, entry.DstIP, entry.DevName)
 }
 
 func (c *Client) deleteFDBEntry(key fdbKey, entry fdbEntry) {

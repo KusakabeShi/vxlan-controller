@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"vxlan-controller/pkg/vlog"
 	"net"
 	"net/netip"
 	"os"
@@ -134,7 +134,7 @@ func New(cfg *config.ClientConfig) *Client {
 
 	filters, err := filter.NewFilterSet(cfg.Filters)
 	if err != nil {
-		log.Fatalf("[Client] failed to initialize filters: %v", err)
+		vlog.Fatalf("[Client] failed to initialize filters: %v", err)
 	}
 
 	c := &Client{
@@ -162,7 +162,7 @@ func New(cfg *config.ClientConfig) *Client {
 }
 
 func (c *Client) Run() error {
-	log.Printf("[Client] starting, ID=%s", c.ClientID.Hex()[:8])
+	vlog.Infof("[Client] starting, ID=%s", c.ClientID.Hex()[:8])
 
 	// Step 1: NTP sync
 	go c.ntp.RunLoop(c.Config.NTPPeriod, c.ctx.Done())
@@ -305,7 +305,7 @@ func (c *Client) tcpConnLoop(ctrlID types.ControllerID, af types.AFName, ctrl co
 		elapsed := time.Since(start)
 
 		if err != nil {
-			log.Printf("[Client] connection to controller %s AF=%s failed: %v", ctrlID.Hex()[:8], af, err)
+			vlog.Warnf("[Client] connection to controller %s AF=%s failed: %v", ctrlID.Hex()[:8], af, err)
 		}
 
 		// Reset backoff if connection lasted > 10s (was a real connection, not immediate fail)
@@ -350,7 +350,7 @@ func (c *Client) connectToController(ctrlID types.ControllerID, af types.AFName,
 		tc.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	log.Printf("[Client] connected to controller %s on AF=%s", ctrlID.Hex()[:8], af)
+	vlog.Infof("[Client] connected to controller %s on AF=%s", ctrlID.Hex()[:8], af)
 
 	// Noise IK handshake
 	localIndex := c.probeSessions.AllocateIndex()
@@ -378,7 +378,7 @@ func (c *Client) connectToController(ctrlID types.ControllerID, af types.AFName,
 	}
 
 	session.IsUDP = false
-	log.Printf("[Client] handshake completed with controller %s on AF=%s", ctrlID.Hex()[:8], af)
+	vlog.Infof("[Client] handshake completed with controller %s on AF=%s", ctrlID.Hex()[:8], af)
 
 	// Send ClientRegister
 	reg := &pb.ClientRegister{
@@ -482,13 +482,13 @@ func (c *Client) setupUDPSession(ctrl config.ControllerEndpoint, conn *net.UDPCo
 	localIndex := crypto.NewSessionManager().AllocateIndex()
 	initMsg, state, err := crypto.HandshakeInitiate(c.PrivateKey, ctrl.PubKey, localIndex)
 	if err != nil {
-		log.Printf("[Client] UDP handshake initiate error: %v", err)
+		vlog.Errorf("[Client] UDP handshake initiate error: %v", err)
 		return nil
 	}
 
 	ctrlAddr, err := net.ResolveUDPAddr("udp", ctrl.Addr.String())
 	if err != nil {
-		log.Printf("[Client] UDP resolve error: %v", err)
+		vlog.Errorf("[Client] UDP resolve error: %v", err)
 		return nil
 	}
 
@@ -500,17 +500,17 @@ func (c *Client) setupUDPSession(ctrl config.ControllerEndpoint, conn *net.UDPCo
 	n, _, err := conn.ReadFromUDP(buf)
 	conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		log.Printf("[Client] UDP handshake response timeout: %v", err)
+		vlog.Warnf("[Client] UDP handshake response timeout: %v", err)
 		return nil
 	}
 
 	session, err := crypto.HandshakeFinalize(state, buf[:n])
 	if err != nil {
-		log.Printf("[Client] UDP handshake finalize error: %v", err)
+		vlog.Errorf("[Client] UDP handshake finalize error: %v", err)
 		return nil
 	}
 	session.IsUDP = true
-	log.Printf("[Client] UDP session established with controller at %s", ctrlAddr)
+	vlog.Debugf("[Client] UDP session established with controller at %s", ctrlAddr)
 	return session
 }
 
@@ -545,18 +545,18 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 
 		msgType, payload, _, err := protocol.ReadUDPPacket(data, sm.FindByIndex)
 		if err != nil {
-			log.Printf("[Client] commUDP ReadUDPPacket error: %v (len=%d)", err, n)
+			vlog.Verbosef("[Client] commUDP ReadUDPPacket error: %v (len=%d)", err, n)
 			continue
 		}
 
 		if msgType == protocol.MsgMulticastDeliver {
 			var deliver pb.MulticastDeliver
 			if err := proto.Unmarshal(payload, &deliver); err != nil {
-				log.Printf("[Client] multicast deliver unmarshal error: %v", err)
+				vlog.Errorf("[Client] multicast deliver unmarshal error: %v", err)
 				continue
 			}
 
-			log.Printf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
+			vlog.Debugf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
 
 			// Filter inbound multicast
 			if !c.Filters.InputMcast.FilterMcast(deliver.Payload) {
@@ -567,7 +567,7 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 			select {
 			case c.tapInjectCh <- deliver.Payload:
 			default:
-				log.Printf("[Client] tapInjectCh full, dropping frame")
+				vlog.Warnf("[Client] tapInjectCh full, dropping frame")
 			}
 		}
 	}
@@ -586,7 +586,7 @@ func (c *Client) tcpRecvLoop(ctrlID types.ControllerID, af types.AFName, afc *Cl
 		msgType, payload, err := protocol.ReadTCPMessage(afc.TCPConn, afc.Session)
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("[Client] TCP recv error from controller %s: %v", ctrlID.Hex()[:8], err)
+				vlog.Warnf("[Client] TCP recv error from controller %s: %v", ctrlID.Hex()[:8], err)
 			}
 			return
 		}
@@ -599,7 +599,7 @@ func (c *Client) tcpRecvLoop(ctrlID types.ControllerID, af types.AFName, afc *Cl
 		case protocol.MsgControllerProbeRequest:
 			c.handleControllerProbeRequest(ctrlID, payload)
 		default:
-			log.Printf("[Client] unknown msg_type %d from controller", msgType)
+			vlog.Warnf("[Client] unknown msg_type %d from controller", msgType)
 		}
 	}
 }
@@ -607,7 +607,7 @@ func (c *Client) tcpRecvLoop(ctrlID types.ControllerID, af types.AFName, afc *Cl
 func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFName, payload []byte) {
 	var state pb.ControllerState
 	if err := proto.Unmarshal(payload, &state); err != nil {
-		log.Printf("[Client] unmarshal ControllerState error: %v", err)
+		vlog.Errorf("[Client] unmarshal ControllerState error: %v", err)
 		return
 	}
 
@@ -643,7 +643,7 @@ func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFNam
 	// Full update received on this AF → set as active AF
 	cc.ActiveAF = af
 
-	log.Printf("[Client] received full state from controller %s (AF=%s, %d clients)", ctrlID.Hex()[:8], af, view.ClientCount)
+	vlog.Debugf("[Client] received full state from controller %s (AF=%s, %d clients)", ctrlID.Hex()[:8], af, view.ClientCount)
 
 	// Notify authority selection and FDB
 	select {
@@ -665,7 +665,7 @@ func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFNam
 func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload []byte) {
 	var update pb.ControllerStateUpdate
 	if err := proto.Unmarshal(payload, &update); err != nil {
-		log.Printf("[Client] unmarshal ControllerStateUpdate error: %v", err)
+		vlog.Errorf("[Client] unmarshal ControllerStateUpdate error: %v", err)
 		return
 	}
 
@@ -708,7 +708,7 @@ func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload 
 func (c *Client) handleControllerProbeRequest(ctrlID types.ControllerID, payload []byte) {
 	var req pb.ControllerProbeRequest
 	if err := proto.Unmarshal(payload, &req); err != nil {
-		log.Printf("[Client] unmarshal ControllerProbeRequest error: %v", err)
+		vlog.Errorf("[Client] unmarshal ControllerProbeRequest error: %v", err)
 		return
 	}
 
@@ -867,7 +867,7 @@ func (c *Client) getFullMACsEncoded() []byte {
 	}
 	data, err := proto.Marshal(update)
 	if err != nil {
-		log.Printf("[Client] marshal full MACUpdate error: %v", err)
+		vlog.Errorf("[Client] marshal full MACUpdate error: %v", err)
 		return nil
 	}
 	return clientEncodeMessage(protocol.MsgMACUpdate, data)
@@ -887,13 +887,13 @@ func (c *Client) apiServer() {
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
-		log.Printf("[Client] API server listen error: %v", err)
+		vlog.Errorf("[Client] API server listen error: %v", err)
 		return
 	}
 	defer listener.Close()
 	defer os.Remove(socketPath)
 
-	log.Printf("[Client] API server listening on %s", socketPath)
+	vlog.Debugf("[Client] API server listening on %s", socketPath)
 
 	go func() {
 		<-c.ctx.Done()
@@ -986,15 +986,15 @@ func (c *Client) updateBindAddr(af types.AFName, newAddr netip.Addr) error {
 	afCfg.BindAddr = newAddr
 	c.mu.Unlock()
 
-	log.Printf("[Client] bind_addr updated: AF=%s %s -> %s", af, oldAddr, newAddr)
+	vlog.Infof("[Client] bind_addr updated: AF=%s %s -> %s", af, oldAddr, newAddr)
 
 	// Update VXLAN device local IP (requires ip command, netlink LinkModify doesn't support it)
 	if vd, ok := c.VxlanDevs[af]; ok {
 		cmd := exec.Command("ip", "link", "set", vd.Name, "type", "vxlan", "local", newAddr.String())
 		if out, err := cmd.CombinedOutput(); err != nil {
-			log.Printf("[Client] vxlan %s local update error: %v: %s", vd.Name, err, out)
+			vlog.Errorf("[Client] vxlan %s local update error: %v: %s", vd.Name, err, out)
 		} else {
-			log.Printf("[Client] vxlan %s local updated to %s", vd.Name, newAddr)
+			vlog.Infof("[Client] vxlan %s local updated to %s", vd.Name, newAddr)
 		}
 	}
 

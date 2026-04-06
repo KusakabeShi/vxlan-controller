@@ -1,7 +1,6 @@
 package client
 
 import (
-	"log"
 	"math"
 	"net"
 	"net/netip"
@@ -11,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"vxlan-controller/pkg/crypto"
+	"vxlan-controller/pkg/vlog"
 	"vxlan-controller/pkg/protocol"
 	"vxlan-controller/pkg/types"
 
@@ -24,13 +24,13 @@ func (c *Client) probeListenLoop(af types.AFName) {
 
 	udpAddr, err := net.ResolveUDPAddr("udp", bindStr)
 	if err != nil {
-		log.Printf("[Client] probe listen: resolve error for %s: %v", af, err)
+		vlog.Errorf("[Client] probe listen: resolve error for %s: %v", af, err)
 		return
 	}
 
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		log.Printf("[Client] probe listen error on %s: %v", bindStr, err)
+		vlog.Errorf("[Client] probe listen error on %s: %v", bindStr, err)
 		return
 	}
 	defer conn.Close()
@@ -39,7 +39,7 @@ func (c *Client) probeListenLoop(af types.AFName) {
 	c.probeConns[af] = conn
 	c.mu.Unlock()
 
-	log.Printf("[Client] probe listening on %s (AF=%s)", bindStr, af)
+	vlog.Debugf("[Client] probe listening on %s (AF=%s)", bindStr, af)
 
 	buf := make([]byte, 65536)
 	for {
@@ -185,7 +185,7 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 	inProbeInterval := time.Duration(req.InProbeIntervalMs) * time.Millisecond
 	probeTimeout := time.Duration(req.ProbeTimeoutMs) * time.Millisecond
 
-	log.Printf("[Client] starting probe (probe_id=%d, times=%d)", probeID, probeTimes)
+	vlog.Debugf("[Client] starting probe (probe_id=%d, times=%d)", probeID, probeTimes)
 
 	// Collect peers
 	c.mu.Lock()
@@ -207,7 +207,7 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 	c.mu.Unlock()
 
 	if len(peers) == 0 {
-		log.Printf("[Client] no peers for probe")
+		vlog.Debugf("[Client] no peers for probe")
 		return
 	}
 
@@ -310,11 +310,11 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 	// Log collected latencies
 	latMu.Lock()
 	for key, lats := range latencies {
-		log.Printf("[Client] probe results: peer=%s af=%s latencies=%v sent=%d", key.clientID.Hex()[:8], key.af, lats, sent[key])
+		vlog.Debugf("[Client] probe results: peer=%s af=%s latencies=%v sent=%d", key.clientID.Hex()[:8], key.af, lats, sent[key])
 	}
 	for key, s := range sent {
 		if _, ok := latencies[key]; !ok {
-			log.Printf("[Client] probe results: peer=%s af=%s NO RESPONSES sent=%d", key.clientID.Hex()[:8], key.af, s)
+			vlog.Debugf("[Client] probe results: peer=%s af=%s NO RESPONSES sent=%d", key.clientID.Hex()[:8], key.af, s)
 		}
 	}
 	latMu.Unlock()
@@ -389,7 +389,7 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 	}
 	c.mu.Unlock()
 
-	log.Printf("[Client] probe completed (probe_id=%d), results sent to all controllers", probeID)
+	vlog.Debugf("[Client] probe completed (probe_id=%d), results sent to all controllers", probeID)
 }
 
 type peerInfo struct {

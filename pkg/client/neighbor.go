@@ -1,7 +1,7 @@
 package client
 
 import (
-	"log"
+	"vxlan-controller/pkg/vlog"
 	"net"
 	"net/netip"
 
@@ -25,7 +25,7 @@ func (c *Client) neighborWatchLoop() {
 	defer close(done)
 
 	if err := netlink.NeighSubscribe(neighCh, done); err != nil {
-		log.Printf("[Client] netlink neighbor subscribe error: %v", err)
+		vlog.Errorf("[Client] netlink neighbor subscribe error: %v", err)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (c *Client) handleNeighEvent(update netlink.NeighUpdate) {
 	}
 	data, err := proto.Marshal(macUpdate)
 	if err != nil {
-		log.Printf("[Client] marshal MACUpdate error: %v", err)
+		vlog.Errorf("[Client] marshal MACUpdate error: %v", err)
 		return
 	}
 
@@ -179,14 +179,14 @@ func (c *Client) isRelevantNeighEvent(neigh netlink.Neigh) bool {
 func (c *Client) dumpLocalState() {
 	bridge, err := netlink.LinkByName(c.Config.BridgeName)
 	if err != nil {
-		log.Printf("[Client] bridge %s not found: %v", c.Config.BridgeName, err)
+		vlog.Errorf("[Client] bridge %s not found: %v", c.Config.BridgeName, err)
 		return
 	}
 	bridgeIndex := bridge.Attrs().Index
 
 	neighs, err := netlink.NeighList(0, unix.AF_BRIDGE)
 	if err != nil {
-		log.Printf("[Client] FDB dump error: %v", err)
+		vlog.Errorf("[Client] FDB dump error: %v", err)
 		return
 	}
 
@@ -242,7 +242,7 @@ func (c *Client) dumpLocalState() {
 	}
 	routes = filtered
 
-	log.Printf("[Client] local state dump: found %d local routes (%d after filter)", total, len(routes))
+	vlog.Infof("[Client] local state dump: found %d local routes (%d after filter)", total, len(routes))
 
 	c.mu.Lock()
 	c.LocalMACs = routes

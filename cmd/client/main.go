@@ -10,11 +10,13 @@ import (
 
 	"vxlan-controller/pkg/client"
 	"vxlan-controller/pkg/config"
+	"vxlan-controller/pkg/vlog"
 )
 
 func main() {
 	configPath := flag.String("config", "client.yaml", "path to client config file")
 	defaultConfig := flag.Bool("default-config", false, "print default config and exit")
+	logLevel := flag.String("log-level", "", "log level: error, warn, info, debug, verbose (overrides config)")
 	flag.Parse()
 
 	if *defaultConfig {
@@ -29,6 +31,13 @@ func main() {
 	cfg, err := config.LoadClientConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Set log level: CLI flag overrides config
+	if *logLevel != "" {
+		vlog.SetLevel(vlog.ParseLevel(*logLevel))
+	} else if cfg.LogLevel != "" {
+		vlog.SetLevel(vlog.ParseLevel(cfg.LogLevel))
 	}
 
 	cl := client.New(cfg)

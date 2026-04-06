@@ -3,9 +3,10 @@ package client
 import (
 	"fmt"
 	"io"
-	"log"
 	"os/exec"
 	"strings"
+
+	"vxlan-controller/pkg/vlog"
 
 	"vxlan-controller/pkg/config"
 	"vxlan-controller/pkg/types"
@@ -87,7 +88,7 @@ func (c *Client) ensureBridge() error {
 		if err := netlink.LinkSetUp(bridge); err != nil {
 			return err
 		}
-		log.Printf("[Client] created bridge %s", c.Config.BridgeName)
+		vlog.Infof("[Client] created bridge %s", c.Config.BridgeName)
 	}
 	return nil
 }
@@ -156,7 +157,7 @@ func (c *Client) createVxlanDevice(vd *VxlanDev, afCfg *config.ClientAFConfig) e
 		return fmt.Errorf("link up: %w", err)
 	}
 
-	log.Printf("[Client] created vxlan device %s (VNI=%d, local=%s)", vd.Name, vd.VNI, vd.BindAddr)
+	vlog.Infof("[Client] created vxlan device %s (VNI=%d, local=%s)", vd.Name, vd.VNI, vd.BindAddr)
 	return nil
 }
 
@@ -198,7 +199,7 @@ func (c *Client) createTapInject() error {
 		return fmt.Errorf("tap link up: %w", err)
 	}
 
-	log.Printf("[Client] created tap-inject")
+	vlog.Infof("[Client] created tap-inject")
 	return nil
 }
 
@@ -220,7 +221,7 @@ func (c *Client) setupNftables() error {
 		return fmt.Errorf("nft: %v: %s", err, out)
 	}
 
-	log.Printf("[Client] nftables MSS clamping configured")
+	vlog.Infof("[Client] nftables MSS clamping configured")
 	return nil
 }
 
@@ -240,7 +241,7 @@ func (c *Client) updateVxlanBindAddr(af types.AFName, newAddr string) error {
 	}
 
 	vd.BindAddr = newAddr
-	log.Printf("[Client] updated vxlan %s local addr to %s", vd.Name, newAddr)
+	vlog.Infof("[Client] updated vxlan %s local addr to %s", vd.Name, newAddr)
 	return nil
 }
 

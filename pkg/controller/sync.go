@@ -1,13 +1,13 @@
 package controller
 
 import (
-	"log"
 	"net"
 	"net/netip"
 
 	"google.golang.org/protobuf/proto"
 
 	"vxlan-controller/pkg/protocol"
+	"vxlan-controller/pkg/vlog"
 
 	pb "vxlan-controller/proto"
 )
@@ -21,7 +21,7 @@ func (c *Controller) pushDelta(update *pb.ControllerStateUpdate) {
 	// Pre-marshal the unfiltered version for clients without route filters
 	data, err := proto.Marshal(update)
 	if err != nil {
-		log.Printf("[Controller] failed to marshal ControllerStateUpdate: %v", err)
+		vlog.Errorf("[Controller] failed to marshal ControllerStateUpdate: %v", err)
 		return
 	}
 	defaultMsg := encodeMessage(protocol.MsgControllerStateUpdate, data)
@@ -53,7 +53,7 @@ func (c *Controller) pushDelta(update *pb.ControllerStateUpdate) {
 		select {
 		case cc.SendQueue <- QueueItem{State: msg}:
 		default:
-			log.Printf("[Controller] send queue full for client %s, marking unsynced", cc.ClientID.Hex())
+			vlog.Warnf("[Controller] send queue full for client %s, marking unsynced", cc.ClientID.Hex())
 			cc.Synced = false
 		}
 	}
@@ -100,7 +100,7 @@ func (c *Controller) getFullStateEncodedForClient(cc *ClientConn) []byte {
 
 	data, err := proto.Marshal(snapshot)
 	if err != nil {
-		log.Printf("[Controller] failed to marshal ControllerState: %v", err)
+		vlog.Errorf("[Controller] failed to marshal ControllerState: %v", err)
 		return nil
 	}
 	return encodeMessage(protocol.MsgControllerState, data)

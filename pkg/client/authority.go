@@ -2,9 +2,9 @@ package client
 
 import (
 	"bytes"
-	"log"
 
 	"vxlan-controller/pkg/types"
+	"vxlan-controller/pkg/vlog"
 
 	pb "vxlan-controller/proto"
 )
@@ -64,15 +64,15 @@ func (c *Client) authoritySelectLoop() {
 		return
 	}
 
-	log.Printf("[Client] init_timeout elapsed, selecting authority controller")
+	vlog.Infof("[Client] init_timeout elapsed, selecting authority controller")
 
 	c.mu.Lock()
 	auth := c.selectAuthority()
 	if auth != nil {
 		c.AuthorityCtrl = auth
-		log.Printf("[Client] selected authority controller: %s", auth.Hex()[:8])
+		vlog.Infof("[Client] selected authority controller: %s", auth.Hex()[:8])
 	} else {
-		log.Printf("[Client] no synced controller available for authority selection")
+		vlog.Infof("[Client] no synced controller available for authority selection")
 	}
 	c.mu.Unlock()
 
@@ -101,11 +101,11 @@ func (c *Client) authoritySelectLoop() {
 			if newAuth == nil && c.AuthorityCtrl != nil {
 				changed = true
 				c.AuthorityCtrl = nil
-				log.Printf("[Client] authority controller lost")
+				vlog.Infof("[Client] authority controller lost")
 			} else if newAuth != nil && (c.AuthorityCtrl == nil || *newAuth != *c.AuthorityCtrl) {
 				changed = true
 				c.AuthorityCtrl = newAuth
-				log.Printf("[Client] authority controller changed to %s", newAuth.Hex()[:8])
+				vlog.Infof("[Client] authority controller changed to %s", newAuth.Hex()[:8])
 			}
 			c.mu.Unlock()
 

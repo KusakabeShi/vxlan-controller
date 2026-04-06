@@ -23,6 +23,7 @@ type ClientConfigFile struct {
 	NTPServers        []string                        `yaml:"ntp_servers"`
 	NTPPeriodH        int                             `yaml:"ntp_period_h"`
 	Filters           *filter.FilterConfigFile         `yaml:"filters"`
+	LogLevel          string                          `yaml:"log_level"`
 }
 
 type ClientAFConfigFile struct {
@@ -56,6 +57,7 @@ type ClientConfig struct {
 	NTPServers       []string
 	NTPPeriod        time.Duration
 	Filters          *filter.FilterConfig
+	LogLevel         string
 }
 
 type ClientAFConfig struct {
@@ -104,6 +106,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
 		Filters:          filter.ParseFilterConfigFile(raw.Filters),
+		LogLevel:         raw.LogLevel,
 	}
 
 	// Parse private key

@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/netip"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"vxlan-controller/pkg/filter"
 	"vxlan-controller/pkg/protocol"
 	"vxlan-controller/pkg/types"
+	"vxlan-controller/pkg/vlog"
 
 	pb "vxlan-controller/proto"
 )
@@ -108,7 +108,7 @@ func New(cfg *config.ControllerConfig) *Controller {
 }
 
 func (c *Controller) Run() error {
-	log.Printf("[Controller] starting, ID=%s", c.ControllerID.Hex())
+	vlog.Infof("[Controller] starting, ID=%s", c.ControllerID.Hex())
 
 	// Start AF listeners
 	for afName, afCfg := range c.Config.AFSettings {
@@ -187,7 +187,7 @@ func (c *Controller) startAFListener(afName types.AFName, afCfg *config.Controll
 	}
 	c.afListeners[afName] = al
 
-	log.Printf("[Controller] listening on %s (AF=%s)", bindStr, afName)
+	vlog.Infof("[Controller] listening on %s (AF=%s)", bindStr, afName)
 
 	go c.tcpAcceptLoop(al)
 	go c.udpReadLoop(al)
@@ -203,7 +203,7 @@ func (c *Controller) tcpAcceptLoop(al *AFListener) {
 			case <-c.ctx.Done():
 				return
 			default:
-				log.Printf("[Controller] TCP accept error on %s: %v", al.AF, err)
+				vlog.Errorf("[Controller] TCP accept error on %s: %v", al.AF, err)
 				continue
 			}
 		}
@@ -222,7 +222,7 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 	defer conn.Close()
 
 	remoteIP := addrFromConn(conn)
-	log.Printf("[Controller] new TCP connection from %s on AF=%s", conn.RemoteAddr(), af)
+	vlog.Infof("[Controller] new TCP connection from %s on AF=%s", conn.RemoteAddr(), af)
 
 	// Step 1: Noise IK handshake
 	localIndex := c.udpSessions.AllocateIndex()
@@ -230,40 +230,40 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 	// Read HandshakeInit
 	initMsg, err := protocol.ReadTCPRaw(conn)
 	if err != nil {
-		log.Printf("[Controller] handshake read error: %v", err)
+		vlog.Errorf("[Controller] handshake read error: %v", err)
 		return
 	}
 
 	respMsg, session, err := crypto.HandshakeRespond(c.PrivateKey, initMsg, c.allowedKeys, localIndex)
 	if err != nil {
-		log.Printf("[Controller] handshake failed: %v", err)
+		vlog.Warnf("[Controller] handshake failed: %v", err)
 		return
 	}
 
 	// Send HandshakeResp
 	if err := protocol.WriteTCPRaw(conn, respMsg); err != nil {
-		log.Printf("[Controller] handshake resp write error: %v", err)
+		vlog.Errorf("[Controller] handshake resp write error: %v", err)
 		return
 	}
 
 	session.IsUDP = false
 	clientID := types.ClientID(session.PeerID)
-	log.Printf("[Controller] handshake completed with client %s on AF=%s", clientID.Hex()[:8], af)
+	vlog.Debugf("[Controller] handshake completed with client %s on AF=%s", clientID.Hex()[:8], af)
 
 	// Step 2: Read ClientRegister
 	msgType, payload, err := protocol.ReadTCPMessage(conn, session)
 	if err != nil {
-		log.Printf("[Controller] read ClientRegister error: %v", err)
+		vlog.Errorf("[Controller] read ClientRegister error: %v", err)
 		return
 	}
 	if msgType != protocol.MsgClientRegister {
-		log.Printf("[Controller] expected ClientRegister, got %d", msgType)
+		vlog.Warnf("[Controller] expected ClientRegister, got %d", msgType)
 		return
 	}
 
 	var reg pb.ClientRegister
 	if err := proto.Unmarshal(payload, &reg); err != nil {
-		log.Printf("[Controller] unmarshal ClientRegister error: %v", err)
+		vlog.Errorf("[Controller] unmarshal ClientRegister error: %v", err)
 		return
 	}
 
@@ -294,7 +294,7 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 	var ipChanged bool
 	if oldEp, had := ci.Endpoints[af]; had && oldEp.IP != remoteIP {
 		ipChanged = true
-		log.Printf("[Controller] client %s AF=%s IP changed %s -> %s",
+		vlog.Debugf("[Controller] client %s AF=%s IP changed %s -> %s",
 			clientID.Hex()[:8], af, oldEp.IP, remoteIP)
 	}
 
@@ -321,7 +321,7 @@ func (c *Controller) handleTCPConn(af types.AFName, conn net.Conn) {
 		}
 		filters, err := filter.NewFilterSet(filterCfg)
 		if err != nil {
-			log.Printf("[Controller] failed to init filters for client %s: %v", clientID.Hex()[:8], err)
+			vlog.Errorf("[Controller] failed to init filters for client %s: %v", clientID.Hex()[:8], err)
 			c.mu.Unlock()
 			conn.Close()
 			return
@@ -427,7 +427,7 @@ func (c *Controller) tcpRecvLoop(cc *ClientConn, afc *AFConn, session *crypto.Se
 
 		msgType, payload, err := protocol.ReadTCPMessage(afc.TCPConn, session)
 		if err != nil {
-			log.Printf("[Controller] TCP recv error from %s: %v", cc.ClientID.Hex()[:8], err)
+			vlog.Errorf("[Controller] TCP recv error from %s: %v", cc.ClientID.Hex()[:8], err)
 			return
 		}
 
@@ -444,7 +444,7 @@ func (c *Controller) tcpRecvLoop(cc *ClientConn, afc *AFConn, session *crypto.Se
 		case protocol.MsgProbeResults:
 			c.handleProbeResults(cc, payload)
 		default:
-			log.Printf("[Controller] unknown msg_type %d from %s", msgType, cc.ClientID.Hex()[:8])
+			vlog.Infof("[Controller] unknown msg_type %d from %s", msgType, cc.ClientID.Hex()[:8])
 		}
 	}
 }
@@ -452,7 +452,7 @@ func (c *Controller) tcpRecvLoop(cc *ClientConn, afc *AFConn, session *crypto.Se
 func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 	var update pb.MACUpdate
 	if err := proto.Unmarshal(payload, &update); err != nil {
-		log.Printf("[Controller] unmarshal MACUpdate error: %v", err)
+		vlog.Infof("[Controller] unmarshal MACUpdate error: %v", err)
 		return
 	}
 
@@ -487,7 +487,7 @@ func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 			routes = append(routes, rt)
 		}
 		ci.Routes = routes
-		log.Printf("[Controller] MACUpdate from %s: %d routes (full)", cc.ClientID.Hex()[:8], len(routes))
+		vlog.Debugf("[Controller] MACUpdate from %s: %d routes (full)", cc.ClientID.Hex()[:8], len(routes))
 	} else {
 		// Incremental: apply add/delete per route
 		for _, r := range update.Routes {
@@ -513,7 +513,7 @@ func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 				ci.Routes = addRoute(ci.Routes, rt)
 			}
 		}
-		log.Printf("[Controller] MACUpdate from %s: %d changes (inc)", cc.ClientID.Hex()[:8], len(update.Routes))
+		vlog.Debugf("[Controller] MACUpdate from %s: %d changes (inc)", cc.ClientID.Hex()[:8], len(update.Routes))
 	}
 
 	// Update RouteTable
@@ -532,7 +532,7 @@ func (c *Controller) handleMACUpdate(cc *ClientConn, payload []byte) {
 func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 	var results pb.ProbeResults
 	if err := proto.Unmarshal(payload, &results); err != nil {
-		log.Printf("[Controller] unmarshal ProbeResults error: %v", err)
+		vlog.Errorf("[Controller] unmarshal ProbeResults error: %v", err)
 		return
 	}
 
@@ -624,7 +624,7 @@ func (c *Controller) triggerSyncNewClient() {
 	data, err := proto.Marshal(req)
 	if err != nil {
 		c.mu.Unlock()
-		log.Printf("[Controller] failed to marshal ControllerProbeRequest: %v", err)
+		vlog.Errorf("[Controller] failed to marshal ControllerProbeRequest: %v", err)
 		return
 	}
 
@@ -640,7 +640,7 @@ func (c *Controller) triggerSyncNewClient() {
 	}
 	c.mu.Unlock()
 
-	log.Printf("[Controller] sent ControllerProbeRequest (probe_id=%d) to all clients", probeID)
+	vlog.Debugf("[Controller] sent ControllerProbeRequest (probe_id=%d) to all clients", probeID)
 }
 
 func (c *Controller) resetTopoDebounce() {
@@ -677,17 +677,17 @@ func (c *Controller) triggerTopologyUpdate() {
 	newRM := computeRouteMatrix(c.State.LatencyMatrix, c.State.Clients)
 	c.State.RouteMatrix = newRM
 
-	log.Printf("[Controller] topology update: RouteMatrix recomputed (%d clients, %d latency sources)", len(c.State.Clients), len(c.State.LatencyMatrix))
+	vlog.Debugf("[Controller] topology update: RouteMatrix recomputed (%d clients, %d latency sources)", len(c.State.Clients), len(c.State.LatencyMatrix))
 
 	// Log LatencyMatrix and RouteMatrix for debugging
 	for src, dsts := range c.State.LatencyMatrix {
 		for dst, sl := range dsts {
-			log.Printf("[Controller] LatencyMatrix: %s -> %s: lat=%.2f af=%s", src.Hex()[:8], dst.Hex()[:8], sl.Latency, sl.AF)
+			vlog.Verbosef("[Controller] LatencyMatrix: %s -> %s: lat=%.2f af=%s", src.Hex()[:8], dst.Hex()[:8], sl.Latency, sl.AF)
 		}
 	}
 	for src, dsts := range newRM {
 		for dst, re := range dsts {
-			log.Printf("[Controller] RouteMatrix: %s -> %s: nextHop=%s af=%s", src.Hex()[:8], dst.Hex()[:8], re.NextHop.Hex()[:8], re.AF)
+			vlog.Verbosef("[Controller] RouteMatrix: %s -> %s: nextHop=%s af=%s", src.Hex()[:8], dst.Hex()[:8], re.NextHop.Hex()[:8], re.AF)
 		}
 	}
 
@@ -748,7 +748,7 @@ func (c *Controller) clientSendLoop(cc *ClientConn) {
 					continue
 				default:
 				}
-				log.Printf("[Controller] send error to %s: %v", cc.ClientID.Hex()[:8], err)
+				vlog.Errorf("[Controller] send error to %s: %v", cc.ClientID.Hex()[:8], err)
 				continue
 			}
 			if msgType == protocol.MsgControllerState {
@@ -768,7 +768,7 @@ func (c *Controller) clientSendLoop(cc *ClientConn) {
 					continue
 				default:
 				}
-				log.Printf("[Controller] send error to %s: %v", cc.ClientID.Hex()[:8], err)
+				vlog.Errorf("[Controller] send error to %s: %v", cc.ClientID.Hex()[:8], err)
 			}
 		}
 	}
@@ -818,7 +818,7 @@ func (c *Controller) checkOfflineClients() {
 				ci.LastSeen = now // refresh
 				continue
 			}
-			log.Printf("[Controller] client %s offline (last seen %v ago)", id.Hex()[:8], now.Sub(ci.LastSeen))
+			vlog.Debugf("[Controller] client %s offline (last seen %v ago)", id.Hex()[:8], now.Sub(ci.LastSeen))
 			removed = append(removed, id)
 		}
 	}
@@ -953,7 +953,7 @@ func (c *Controller) udpReadLoop(al *AFListener) {
 			case <-c.ctx.Done():
 				return
 			default:
-				log.Printf("[Controller] UDP read error on %s: %v", al.AF, err)
+				vlog.Errorf("[Controller] UDP read error on %s: %v", al.AF, err)
 				continue
 			}
 		}
@@ -969,15 +969,15 @@ func (c *Controller) udpReadLoop(al *AFListener) {
 
 		msgType, payload, peerID, err := protocol.ReadUDPPacket(data, al.UDPSessions.FindByIndex)
 		if err != nil {
-			log.Printf("[Controller] UDP ReadUDPPacket error on %s from %s: %v (len=%d, first_byte=0x%02x)", al.AF, remoteAddr, err, n, data[0])
+			vlog.Warnf("[Controller] UDP ReadUDPPacket error on %s from %s: %v (len=%d, first_byte=0x%02x)", al.AF, remoteAddr, err, n, data[0])
 			continue
 		}
 
 		if msgType == protocol.MsgMulticastForward {
-			log.Printf("[Controller] received MsgMulticastForward on %s from %s (%d bytes payload)", al.AF, remoteAddr, len(payload))
+			vlog.Debugf("[Controller] received MsgMulticastForward on %s from %s (%d bytes payload)", al.AF, remoteAddr, len(payload))
 			c.handleMulticastForward(al, peerID, payload, remoteAddr)
 		} else {
-			log.Printf("[Controller] UDP msg type=0x%02x on %s from %s", byte(msgType), al.AF, remoteAddr)
+			vlog.Verbosef("[Controller] UDP msg type=0x%02x on %s from %s", byte(msgType), al.AF, remoteAddr)
 		}
 	}
 }
@@ -997,7 +997,7 @@ func (c *Controller) handleUDPHandshake(al *AFListener, data []byte, remoteAddr 
 		c.mu.Lock()
 		c.udpAddrs[key] = udpAddr
 		c.mu.Unlock()
-		log.Printf("[Controller] UDP handshake from client %s at %s (AF=%s)", types.ClientID(session.PeerID).Hex()[:8], udpAddr, al.AF)
+		vlog.Debugf("[Controller] UDP handshake from client %s at %s (AF=%s)", types.ClientID(session.PeerID).Hex()[:8], udpAddr, al.AF)
 	}
 
 	al.UDPConn.WriteTo(respMsg, remoteAddr)
@@ -1059,13 +1059,13 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 			}
 
 			if err := protocol.WriteUDPPacket(listener.UDPConn, addr, session, protocol.MsgMulticastDeliver, deliverData); err != nil {
-				log.Printf("[Controller] multicast deliver to %s via %s error: %v", clientID.Hex()[:8], listener.AF, err)
+				vlog.Errorf("[Controller] multicast deliver to %s via %s error: %v", clientID.Hex()[:8], listener.AF, err)
 			} else {
 				deliveredTo++
 			}
 		}
 	}
-	log.Printf("[Controller] multicast from %s: delivered to %d clients", srcID.Hex()[:8], deliveredTo)
+	vlog.Debugf("[Controller] multicast from %s: delivered to %d clients", srcID.Hex()[:8], deliveredTo)
 }
 
 // addRoute adds a route, replacing any existing route with the same MAC.
