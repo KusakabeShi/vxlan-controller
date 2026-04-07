@@ -213,7 +213,7 @@ func (c *Client) createTapInject() error {
 
 func (c *Client) setupNftables() error {
 	var sb strings.Builder
-	sb.WriteString("table bridge vxlan_mss {\n")
+	sb.WriteString(fmt.Sprintf("table bridge %s {\n", c.Config.ClampMSSTable))
 	sb.WriteString("    chain forward {\n")
 	sb.WriteString("        type filter hook forward priority filter; policy accept;\n")
 	for _, vd := range c.VxlanDevs {
@@ -234,7 +234,7 @@ func (c *Client) setupNftables() error {
 }
 
 func (c *Client) cleanupNftables() {
-	exec.Command("nft", "delete", "table", "bridge", "vxlan_mss").Run()
+	exec.Command("nft", "destroy", "table", "bridge", c.Config.ClampMSSTable).Run()
 }
 
 func (c *Client) updateVxlanBindAddr(af types.AFName, newAddr string) error {

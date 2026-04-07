@@ -17,7 +17,8 @@ import (
 type ClientConfigFile struct {
 	PrivateKey        string                          `yaml:"private_key"`
 	BridgeName        string                          `yaml:"bridge_name"`
-	ClampMSSToMTU     bool                            `yaml:"clamp_mss_to_mtu"`
+	ClampMSSToMTU      bool                            `yaml:"clamp_mss_to_mtu"`
+	ClampMSSTable      string                          `yaml:"clamp_mss_table"`
 	NeighSuppress     bool                            `yaml:"neigh_suppress"`
 	VxlanFirewall      bool                            `yaml:"vxlan_firewall"`
 	VxlanFirewallTable string                          `yaml:"vxlan_firewall_table"`
@@ -59,6 +60,7 @@ type ClientConfig struct {
 	PrivateKey       [32]byte
 	BridgeName       string
 	ClampMSSToMTU    bool
+	ClampMSSTable    string
 	NeighSuppress    bool
 	VxlanFirewall      bool
 	VxlanFirewallTable string
@@ -120,6 +122,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 	cfg := &ClientConfig{
 		BridgeName:       raw.BridgeName,
 		ClampMSSToMTU:    raw.ClampMSSToMTU,
+		ClampMSSTable:    raw.ClampMSSTable,
 		NeighSuppress:    raw.NeighSuppress,
 		VxlanFirewall:      raw.VxlanFirewall,
 		VxlanFirewallTable: raw.VxlanFirewallTable,
@@ -131,7 +134,10 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		LogLevel:         raw.LogLevel,
 	}
 
-	// Default firewall table name
+	// Default nftables table names
+	if cfg.ClampMSSToMTU && cfg.ClampMSSTable == "" {
+		cfg.ClampMSSTable = "vxlan_mss"
+	}
 	if cfg.VxlanFirewall && cfg.VxlanFirewallTable == "" {
 		cfg.VxlanFirewallTable = "vxlan_fw"
 	}
