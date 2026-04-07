@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VXLAN Controller</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg:      #0a0c10;
+  --bg2:     #12151c;
+  --bg3:     #1a1e28;
+  --bg4:     #222836;
+  --border:  #2a3040;
+  --border2: #353d50;
+  --text:    #c8cdd8;
+  --text2:   #6b7490;
+  --text3:   #454d64;
+  --accent:  #3b9eff;
+  --accent2: #1a6fd4;
+  --green:   #34d399;
+  --green2:  #065f46;
+  --red:     #f87171;
+  --red2:    #7f1d1d;
+  --yellow:  #fbbf24;
+  --yellow2: #78350f;
+  --mono:    'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+  --sans:    'Outfit', -apple-system, sans-serif;
+  --radius:  6px;
+  --glow:    0 0 20px rgba(59, 158, 255, 0.08);
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Subtle scanline overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+}
+
+/* === HEADER === */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  height: 44px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(12px);
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.header-logo {
+  width: 6px;
+  height: 20px;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 8px rgba(59,158,255,0.4);
+}
+.header h1 {
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+.header h1 span {
+  color: var(--text2);
+  font-weight: 400;
+}
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text2);
+  font-family: var(--mono);
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(52,211,153,0.5);
+  animation: pulse 2s ease infinite;
+}
+.status-dot.disconnected {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(248,113,113,0.5);
+  animation: none;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* === LAYOUT === */
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* === PANEL === */
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--glow);
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: linear-gradient(180deg, var(--bg3) 0%, var(--bg2) 100%);
+  border-bottom: 1px solid var(--border);
+}
+.panel-title {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-title::before {
+  content: '';
+  width: 3px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+.panel-body { padding: 12px; }
+
+/* === TOPOLOGY === */
+#topology-svg {
+  width: 100%;
+  height: 360px;
+  display: block;
+}
+.topo-link {
+  stroke: var(--border2);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 2;
+  opacity: 0.5;
+}
+.topo-link.active {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: none;
+  opacity: 0.6;
+}
+.topo-link.dimmed {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.2;
+}
+.topo-link.spt {
+  stroke: var(--green);
+  stroke-width: 2.5;
+  stroke-dasharray: none;
+  opacity: 0.9;
+  filter: drop-shadow(0 0 4px rgba(52,211,153,0.3));
+}
+.topo-node { cursor: pointer; }
+.topo-node rect.node-bg {
+  fill: var(--bg3);
+  stroke: var(--green);
+  stroke-width: 2.5;
+  rx: 8; ry: 8;
+  transition: all 0.2s ease;
+  filter: drop-shadow(0 0 4px rgba(52,211,153,0.2));
+}
+.topo-node rect.node-bg.offline {
+  stroke: var(--red);
+  filter: drop-shadow(0 0 4px rgba(248,113,113,0.2));
+}
+.topo-node:hover rect.node-bg {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 8px rgba(59,158,255,0.3));
+}
+.topo-node.selected rect.node-bg {
+  stroke: var(--accent);
+  fill: rgba(59,158,255,0.1);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 12px rgba(59,158,255,0.4));
+}
+.topo-node text {
+  fill: var(--text);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.topo-link-label {
+  fill: var(--text2);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.topo-link-label-bg {
+  fill: var(--bg2);
+  rx: 3;
+  ry: 3;
+}
+
+/* === SITE DETAIL (expandable under topology) === */
+.site-detail {
+  display: none;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.site-detail.open { display: block; }
+.site-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+}
+.site-detail-header h3 {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.site-detail-close {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 2px 8px;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+.site-detail-close:hover {
+  border-color: var(--text2);
+  color: var(--text);
+}
+
+/* === TABLES === */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text3);
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+td {
+  padding: 5px 10px;
+  border-bottom: 1px solid rgba(42,48,64,0.5);
+  color: var(--text);
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(59,158,255,0.03); }
+
+/* Latency cells */
+.lat-cell { text-align: center; min-width: 56px; font-variant-numeric: tabular-nums; }
+.lat-good { color: var(--green); }
+.lat-med  { color: var(--yellow); }
+.lat-bad  { color: var(--red); }
+
+/* === MCAST BADGE === */
+.mcast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.mcast-tx { color: var(--text2); }
+.mcast-rx { color: var(--text2); }
+.mcast-rej {
+  color: var(--red);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--red2);
+  transition: background 0.15s;
+}
+.mcast-rej:hover { background: rgba(248,113,113,0.25); }
+
+/* === REJECT TOOLTIP (expandable) === */
+.rej-detail {
+  display: none;
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text2);
+  line-height: 1.4;
+}
+.rej-detail.open { display: block; }
+.rej-reason-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.rej-reason-row:hover { background: rgba(255,255,255,0.03); }
+.rej-reason-row .dir { color: var(--yellow); min-width: 20px; }
+.rej-reason-row .reason { color: var(--text2); flex: 1; }
+.rej-reason-row .count { color: var(--red); margin-left: 8px; }
+.rej-details-list {
+  display: none;
+  margin: 2px 0 4px 16px;
+  padding: 2px 6px;
+  border-left: 2px solid var(--border);
+  font-size: 9px;
+}
+.rej-details-list.open { display: block; }
+.rej-details-list .detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 1px 0;
+  color: var(--text3);
+}
+.rej-details-list .detail-row .detail-count { color: var(--text2); margin-left: 8px; }
+
+/* === FILTER INPUT === */
+.filter-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  outline: none;
+  width: 140px;
+  transition: border-color 0.15s;
+}
+.filter-input:focus { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(59,158,255,0.15); }
+.filter-input::placeholder { color: var(--text3); }
+
+/* === GRID === */
+.two-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (min-width: 720px) {
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+  }
+  .two-col > :nth-child(1) { grid-column: 1; grid-row: 1 / 3; } /* Routes spans both rows */
+  .two-col > :nth-child(2) { grid-column: 2; grid-row: 1; }     /* Latency */
+  .two-col > :nth-child(3) { grid-column: 2; grid-row: 2; }     /* Route Matrix */
+}
+
+/* === SCROLL AREA === */
+.scroll-area {
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+.scroll-area::-webkit-scrollbar { width: 4px; }
+.scroll-area::-webkit-scrollbar-track { background: transparent; }
+.scroll-area::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* === EMPTY STATE === */
+.empty-state {
+  padding: 20px;
+  text-align: center;
+  color: var(--text3);
+  font-size: 11px;
+}
+
+/* === TAG === */
+.af-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 500;
+  background: rgba(59,158,255,0.12);
+  color: var(--accent);
+  letter-spacing: 0.3px;
+}
+
+/* === ANIMATION === */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.panel { animation: fadeIn 0.3s ease both; }
+.panel:nth-child(1) { animation-delay: 0s; }
+.panel:nth-child(2) { animation-delay: 0.08s; }
+.panel:nth-child(3) { animation-delay: 0.16s; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="header-logo"></div>
+    <h1>VXLAN <span>Controller</span></h1>
+  </div>
+  <div class="status-badge">
+    <div class="status-dot" id="ws-dot"></div>
+    <span id="ws-status">connecting</span>
+    <span id="site-count"></span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Topology -->
+  <div class="panel">
+    <div class="panel-header">
+      <div class="panel-title">Topology</div>
+    </div>
+    <div class="panel-body" style="padding:4px 8px 8px;">
+      <svg id="topology-svg"></svg>
+    </div>
+    <div class="site-detail" id="site-detail">
+      <div class="site-detail-header">
+        <h3 id="site-detail-title"></h3>
+        <button class="site-detail-close" id="site-detail-close">close</button>
+      </div>
+      <div style="padding:0 14px 10px;">
+        <table id="site-detail-table">
+          <thead><tr><th>MAC</th><th>IP</th><th>Mcast</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <!-- Route Table -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Routes</div>
+        <input class="filter-input" id="route-filter" placeholder="filter..." />
+      </div>
+      <div class="scroll-area">
+        <table id="route-table">
+          <thead><tr><th>MAC</th><th>IP</th><th>Site</th><th>Mcast</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Latency Matrix -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Latency</div>
+        <span style="font-size:10px;color:var(--text3)">one-way ms</span>
+      </div>
+      <div class="panel-body" style="padding:0;overflow-x:auto;">
+        <table id="latency-table"></table>
+      </div>
+    </div>
+
+    <!-- Route Matrix -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Route Matrix</div>
+        <span style="font-size:10px;color:var(--text3)">next hop</span>
+      </div>
+      <div class="panel-body" style="padding:0;overflow-x:auto;">
+        <table id="route-matrix-table"></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  let state = null;
+  let selectedSite = null;
+  let expandedRej = {};        // track expanded reject reasons by row key
+  let expandedRejDetail = {};  // track expanded detail lists by reason key
+  let ws = null;
+
+  // --- WebSocket ---
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + location.pathname.replace(/\/+$/, '') + '/ws';
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      document.getElementById('ws-dot').className = 'status-dot';
+      document.getElementById('ws-status').textContent = 'live';
+    };
+    ws.onclose = () => {
+      document.getElementById('ws-dot').className = 'status-dot disconnected';
+      document.getElementById('ws-status').textContent = 'reconnecting';
+      setTimeout(connectWS, 2000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (e) => {
+      try { state = JSON.parse(e.data); render(); }
+      catch(err) { console.error('parse', err); }
+    };
+  }
+
+  // --- Helpers ---
+  function alias(mac) {
+    if (!state?.config?.mac_aliases) return mac;
+    const a = state.config.mac_aliases[mac];
+    return a ? a : mac;
+  }
+  function shortMAC(mac) {
+    const p = mac.split(':');
+    return p.slice(-2).join(':');
+  }
+  function displayMAC(mac) {
+    if (!state?.config?.mac_aliases) return mac;
+    const a = state.config.mac_aliases[mac];
+    return a ? '<span style="color:var(--text)">' + a + '</span> <span style="color:var(--text3)">' + shortMAC(mac) + '</span>' : mac;
+  }
+  function nodeName(id) {
+    if (!state) return id.substring(0, 8);
+    const c = state.clients.find(c => c.id === id);
+    return c ? c.name : id.substring(0, 8);
+  }
+  function nodeLabel(name) {
+    if (!state?.config?.nodes) return name;
+    const n = state.config.nodes[name];
+    return n?.label || name;
+  }
+
+  function getMcastStats(mac, siteName) {
+    if (!state?.mcast_stats) return null;
+    if (siteName) {
+      const s = state.mcast_stats[siteName];
+      return s ? (s.find(x => x.mac === mac) || null) : null;
+    }
+    let total = null;
+    for (const stats of Object.values(state.mcast_stats)) {
+      const s = stats.find(x => x.mac === mac);
+      if (s) {
+        if (!total) total = {tx_accepted:0,tx_rejected:0,rx_accepted:0,rx_rejected:0,reject_reasons:[]};
+        total.tx_accepted += s.tx_accepted;
+        total.tx_rejected += s.tx_rejected;
+        total.rx_accepted += s.rx_accepted;
+        total.rx_rejected += s.rx_rejected;
+        if (s.reject_reasons) total.reject_reasons = total.reject_reasons.concat(s.reject_reasons);
+      }
+    }
+    return total;
+  }
+
+  function mcastHTML(stats, rowKey) {
+    if (!stats) return '<span style="color:var(--text3)">-</span>';
+    let h = '<span class="mcast-badge">';
+    h += '<span class="mcast-tx">tx ' + stats.tx_accepted + '</span>';
+    const totalRej = stats.tx_rejected + stats.rx_rejected;
+    if (totalRej > 0) {
+      h += '<span class="mcast-rej" onclick="toggleRej(\'' + rowKey + '\')" title="click for details">rej ' + totalRej + '</span>';
+    }
+    h += '</span>';
+    if (totalRej > 0 && stats.reject_reasons?.length) {
+      const isOpen = expandedRej[rowKey] ? ' open' : '';
+      h += '<div class="rej-detail' + isOpen + '" id="rej-' + rowKey + '">';
+      stats.reject_reasons.forEach((r, ri) => {
+        const detailKey = rowKey + '-' + ri;
+        const hasDetails = r.details && r.details.length > 0;
+        const clickAttr = hasDetails ? ' onclick="toggleRejDetail(\'' + detailKey + '\')"' : '';
+        h += '<div class="rej-reason-row"' + clickAttr + '>';
+        h += '<span class="dir">' + r.direction + '</span>';
+        h += '<span class="reason">' + r.reason + (hasDetails ? ' +' : '') + '</span>';
+        h += '<span class="count">' + r.count + '</span>';
+        h += '</div>';
+        if (hasDetails) {
+          const dOpen = expandedRejDetail[detailKey] ? ' open' : '';
+          h += '<div class="rej-details-list' + dOpen + '" id="rjd-' + detailKey + '">';
+          r.details.forEach(d => {
+            h += '<div class="detail-row">';
+            h += '<span>' + d.detail + '</span>';
+            h += '<span class="detail-count">' + d.count + '</span>';
+            h += '</div>';
+          });
+          h += '</div>';
+        }
+      });
+      h += '</div>';
+    }
+    return h;
+  }
+
+  // Global toggle functions
+  window.toggleRej = function(key) {
+    expandedRej[key] = !expandedRej[key];
+    const el = document.getElementById('rej-' + key);
+    if (el) el.classList.toggle('open');
+  };
+  window.toggleRejDetail = function(key) {
+    expandedRejDetail[key] = !expandedRejDetail[key];
+    const el = document.getElementById('rjd-' + key);
+    if (el) el.classList.toggle('open');
+  };
+
+  function latClass(ms) {
+    if (ms < 10) return 'lat-good';
+    if (ms < 50) return 'lat-med';
+    return 'lat-bad';
+  }
+
+  function getLatency(srcId, dstId) {
+    if (!state?.latency_matrix) return null;
+    for (const row of state.latency_matrix) {
+      if (row.src === srcId) {
+        for (const e of (row.entries || [])) {
+          if (e.dst === dstId) return e.latency;
+        }
+      }
+    }
+    return null;
+  }
+
+  // --- Render ---
+  function render() {
+    if (!state) return;
+    const online = state.clients.filter(c => c.online).length;
+    document.getElementById('site-count').textContent = online + '/' + state.clients.length + ' sites';
+    renderTopology();
+    renderRouteTable();
+    renderLatencyMatrix();
+    renderRouteMatrix();
+    if (selectedSite) renderSiteDetail(selectedSite);
+  }
+
+  // --- Topology ---
+  function renderTopology() {
+    const svg = document.getElementById('topology-svg');
+    const rect = svg.getBoundingClientRect();
+    const W = rect.width || 800;
+    const H = 360;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    const nodes = state.clients.map(c => {
+      let x = W/2, y = H/2;
+      if (state.config?.nodes?.[c.name]) {
+        const n = state.config.nodes[c.name];
+        x = n.pos[0]; y = n.pos[1];
+      }
+      return { id: c.id, name: c.name, online: c.online, rawX: x, rawY: y };
+    });
+
+    if (nodes.length > 0) {
+      let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+      nodes.forEach(n=>{minX=Math.min(minX,n.rawX);maxX=Math.max(maxX,n.rawX);minY=Math.min(minY,n.rawY);maxY=Math.max(maxY,n.rawY)});
+      const pad = 70;
+      const rX = maxX-minX||1, rY = maxY-minY||1;
+      nodes.forEach(n => {
+        n.x = pad + ((n.rawX-minX)/rX) * (W-2*pad);
+        n.y = pad + ((n.rawY-minY)/rY) * (H-2*pad);
+      });
+      if (nodes.length===1) { nodes[0].x=W/2; nodes[0].y=H/2; }
+    }
+
+    const nodeMap = {};
+    nodes.forEach(n => nodeMap[n.id] = n);
+
+    // Build links from route matrix (deduplicated, with both directions)
+    const links = [];
+    const linkSet = new Set();
+    // Build next-hop lookup: nhMap[src][dst] = next_hop_id
+    const nhMap = {};
+    if (state.route_matrix) {
+      state.route_matrix.forEach(row => {
+        if (!nhMap[row.src]) nhMap[row.src] = {};
+        (row.entries||[]).forEach(e => {
+          nhMap[row.src][e.dst] = e.next_hop;
+          const sorted = [row.src, e.dst].sort();
+          const key = sorted.join('-');
+          if (!linkSet.has(key) && nodeMap[sorted[0]] && nodeMap[sorted[1]]) {
+            linkSet.add(key);
+            links.push({
+              src: nodeMap[sorted[0]], dst: nodeMap[sorted[1]], af: e.af,
+              latFwd: getLatency(sorted[0], sorted[1]),
+              latRev: getLatency(sorted[1], sorted[0]),
+            });
+          }
+        });
+      });
+    }
+
+    // Build SPT (shortest path tree) directed edges when a site is selected
+    const sptEdges = new Set(); // "srcId->dstId" directed edges in the tree
+    const selClient = selectedSite ? state.clients.find(c => c.name === selectedSite) : null;
+    if (selClient && nhMap[selClient.id]) {
+      // For each destination, trace the path and collect directed edges
+      for (const dst in nhMap[selClient.id]) {
+        let cur = selClient.id;
+        const visited = new Set();
+        while (cur !== dst && nhMap[cur]?.[dst] && !visited.has(cur)) {
+          visited.add(cur);
+          const nh = nhMap[cur][dst];
+          sptEdges.add(cur + '->' + nh);
+          cur = nh;
+        }
+      }
+    }
+    const hasSPT = sptEdges.size > 0;
+
+    let html = '<defs><filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
+
+    // Links with latency labels
+    const INF = 1e15;
+    links.forEach(l => {
+      const fwdOk = l.latFwd !== null && l.latFwd < INF;
+      const revOk = l.latRev !== null && l.latRev < INF;
+      if (!fwdOk && !revOk) return;
+
+      // Check if this edge is in the SPT (either direction)
+      const fwdInSPT = sptEdges.has(l.src.id + '->' + l.dst.id);
+      const revInSPT = sptEdges.has(l.dst.id + '->' + l.src.id);
+      const inSPT = fwdInSPT || revInSPT;
+
+      // When SPT is active: highlight tree edges, others stay normal
+      let linkClass = 'topo-link active';
+      if (hasSPT && inSPT) linkClass = 'topo-link spt';
+
+      html += '<line class="'+linkClass+'" x1="'+l.src.x+'" y1="'+l.src.y+'" x2="'+l.dst.x+'" y2="'+l.dst.y+'"/>';
+
+      // Position labels at ~30% and ~70% along the line
+      const t1 = 0.28, t2 = 0.72;
+      const x1 = l.src.x + (l.dst.x - l.src.x) * t1;
+      const y1 = l.src.y + (l.dst.y - l.src.y) * t1;
+      const x2 = l.src.x + (l.dst.x - l.src.x) * t2;
+      const y2 = l.src.y + (l.dst.y - l.src.y) * t2;
+      const dx = l.dst.x - l.src.x, dy = l.dst.y - l.src.y;
+      const len = Math.sqrt(dx*dx + dy*dy) || 1;
+      const ox = -dy/len * 10, oy = dx/len * 10;
+
+      // Always show both directions as normal
+      if (fwdOk) {
+        const isSPTDir = fwdInSPT;
+        const txt = l.latFwd.toFixed(1) + ' ms';
+        const tw = txt.length * 5.2 + 8;
+        html += '<rect class="topo-link-label-bg" x="'+(x1+ox-tw/2)+'" y="'+(y1+oy-7)+'" width="'+tw+'" height="14"/>';
+        html += '<text class="topo-link-label" style="fill:'+(isSPTDir?'var(--green)':'#fff')+'" x="'+(x1+ox)+'" y="'+(y1+oy)+'">'+txt+'</text>';
+      }
+      if (revOk) {
+        const isSPTDir = revInSPT;
+        const txt = l.latRev.toFixed(1) + ' ms';
+        const tw = txt.length * 5.2 + 8;
+        html += '<rect class="topo-link-label-bg" x="'+(x2+ox-tw/2)+'" y="'+(y2+oy-7)+'" width="'+tw+'" height="14"/>';
+        html += '<text class="topo-link-label" style="fill:'+(isSPTDir?'var(--green)':'#fff')+'" x="'+(x2+ox)+'" y="'+(y2+oy)+'">'+txt+'</text>';
+      }
+    });
+
+    // Nodes (rounded rectangles)
+    const nodeW = 90, nodeH = 44;
+    nodes.forEach(n => {
+      const sel = selectedSite === n.name ? ' selected' : '';
+      const off = n.online ? '' : ' offline';
+      html += '<g class="topo-node'+sel+'" data-name="'+n.name+'"' + (sel?' filter="url(#glow)"':'') + '>';
+      html += '<rect class="node-bg'+off+'" x="'+(n.x-nodeW/2)+'" y="'+(n.y-nodeH/2)+'" width="'+nodeW+'" height="'+nodeH+'"/>';
+      html += '<text x="'+n.x+'" y="'+(n.y-4)+'">'+nodeLabel(n.name)+'</text>';
+      const client = state.clients.find(c => c.name === n.name);
+      const rc = client?.routes?.length || 0;
+      html += '<text x="'+n.x+'" y="'+(n.y+12)+'" fill="var(--text3)" font-size="9" text-anchor="middle" font-family="var(--mono)">'+rc+' routes</text>';
+      html += '</g>';
+    });
+
+    svg.innerHTML = html;
+
+    svg.querySelectorAll('.topo-node').forEach(g => {
+      g.addEventListener('click', () => {
+        const name = g.dataset.name;
+        if (selectedSite === name) {
+          selectedSite = null;
+          document.getElementById('site-detail').classList.remove('open');
+        } else {
+          selectedSite = name;
+          renderSiteDetail(name);
+          document.getElementById('site-detail').classList.add('open');
+        }
+        renderTopology();
+      });
+    });
+  }
+
+  // --- Site Detail ---
+  function renderSiteDetail(name) {
+    const client = state.clients.find(c => c.name === name);
+    if (!client) return;
+    const title = document.getElementById('site-detail-title');
+    const label = nodeLabel(name);
+    title.textContent = label + (label !== name ? ' (' + name + ')' : '') + (client.online ? '' : ' [offline]');
+
+    const tbody = document.querySelector('#site-detail-table tbody');
+    let html = '';
+    (client.routes||[]).forEach((r, i) => {
+      const stats = getMcastStats(r.mac, client.name);
+      const rk = 'sd-' + name + '-' + i;
+      html += '<tr><td>' + displayMAC(r.mac) + '</td><td>' + (r.ip||'-') + '</td>';
+      html += '<td>' + mcastHTML(stats, rk) + '</td></tr>';
+    });
+    if (!html) html = '<tr><td colspan="3" class="empty-state">no routes</td></tr>';
+    tbody.innerHTML = html;
+  }
+
+  document.getElementById('site-detail-close').addEventListener('click', () => {
+    selectedSite = null;
+    document.getElementById('site-detail').classList.remove('open');
+    renderTopology();
+  });
+
+  // --- Route Table ---
+  function renderRouteTable() {
+    const flt = (document.getElementById('route-filter').value||'').toLowerCase();
+    const tbody = document.querySelector('#route-table tbody');
+    let html = '';
+    (state.route_table||[]).forEach((r, i) => {
+      const owners = Object.keys(r.owners||{}).map(id => nodeLabel(nodeName(id))).join(', ');
+      const a = alias(r.mac);
+      const ipStr = r.ip || '-';
+      if (flt && !(a+' '+r.mac+' '+ipStr+' '+owners).toLowerCase().includes(flt)) return;
+      const stats = getMcastStats(r.mac);
+      const rk = 'rt-' + i;
+      html += '<tr><td>' + displayMAC(r.mac) + '</td><td>' + ipStr + '</td><td>' + owners + '</td>';
+      html += '<td>' + mcastHTML(stats, rk) + '</td></tr>';
+    });
+    if (!html) html = '<tr><td colspan="4" class="empty-state">no routes</td></tr>';
+    tbody.innerHTML = html;
+  }
+
+  // Stable client order (sorted by name, computed once per render)
+  function sortedClients() {
+    return (state.clients || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // --- Latency Matrix ---
+  function renderLatencyMatrix() {
+    const table = document.getElementById('latency-table');
+    const clients = sortedClients();
+    if (clients.length === 0) {
+      table.innerHTML = '<tr><td class="empty-state">no clients</td></tr>';
+      return;
+    }
+
+    const latMap = {};
+    (state.latency_matrix||[]).forEach(row => {
+      (row.entries||[]).forEach(e => { latMap[row.src+'|'+e.dst] = e; });
+    });
+
+    let h = '<thead><tr><th></th>';
+    clients.forEach(c => { h += '<th class="lat-cell">' + nodeLabel(c.name) + '</th>'; });
+    h += '</tr></thead><tbody>';
+
+    clients.forEach(src => {
+      h += '<tr><th style="text-align:right;padding-right:8px;font-weight:500">' + nodeLabel(src.name) + '</th>';
+      clients.forEach(dst => {
+        if (src.id === dst.id) {
+          h += '<td class="lat-cell" style="color:var(--text3)">-</td>';
+        } else {
+          const e = latMap[src.id+'|'+dst.id];
+          if (e && e.latency != null && e.latency < 1e15) {
+            h += '<td class="lat-cell '+latClass(e.latency)+'"><span>'+e.latency.toFixed(1)+'</span></td>';
+          } else {
+            h += '<td class="lat-cell" style="color:var(--text3)">?</td>';
+          }
+        }
+      });
+      h += '</tr>';
+    });
+    h += '</tbody>';
+    table.innerHTML = h;
+  }
+
+  // --- Route Matrix ---
+  function renderRouteMatrix() {
+    const table = document.getElementById('route-matrix-table');
+    const clients = sortedClients();
+    if (clients.length === 0) {
+      table.innerHTML = '<tr><td class="empty-state">no clients</td></tr>';
+      return;
+    }
+
+    // Build next-hop lookup: nhMap[src][dst] = {next_hop, af}
+    const nhMap = {};
+    (state.route_matrix||[]).forEach(row => {
+      if (!nhMap[row.src]) nhMap[row.src] = {};
+      (row.entries||[]).forEach(e => {
+        nhMap[row.src][e.dst] = { next_hop: e.next_hop, af: e.af };
+      });
+    });
+
+    let h = '<thead><tr><th></th>';
+    clients.forEach(c => { h += '<th class="lat-cell">' + nodeLabel(c.name) + '</th>'; });
+    h += '</tr></thead><tbody>';
+
+    clients.forEach(src => {
+      h += '<tr><th style="text-align:right;padding-right:8px;font-weight:500">' + nodeLabel(src.name) + '</th>';
+      clients.forEach(dst => {
+        if (src.id === dst.id) {
+          h += '<td class="lat-cell" style="color:var(--text3)">-</td>';
+        } else {
+          const entry = nhMap[src.id]?.[dst.id];
+          if (entry) {
+            const nhName = nodeName(entry.next_hop);
+            const isDirect = entry.next_hop === dst.id;
+            const style = isDirect ? 'color:var(--text2)' : 'color:var(--accent)';
+            h += '<td class="lat-cell" style="'+style+'">' + nodeLabel(nhName) + '</td>';
+          } else {
+            h += '<td class="lat-cell" style="color:var(--text3)">-</td>';
+          }
+        }
+      });
+      h += '</tr>';
+    });
+    h += '</tbody>';
+    table.innerHTML = h;
+  }
+
+  // --- Init ---
+  document.getElementById('route-filter').addEventListener('input', () => { if (state) renderRouteTable(); });
+  connectWS();
+})();
+</script>
+</body>
+</html>
