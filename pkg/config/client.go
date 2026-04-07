@@ -19,7 +19,8 @@ type ClientConfigFile struct {
 	BridgeName        string                          `yaml:"bridge_name"`
 	ClampMSSToMTU     bool                            `yaml:"clamp_mss_to_mtu"`
 	NeighSuppress     bool                            `yaml:"neigh_suppress"`
-	VxlanFirewall     bool                            `yaml:"vxlan_firewall"`
+	VxlanFirewall      bool                            `yaml:"vxlan_firewall"`
+	VxlanFirewallTable string                          `yaml:"vxlan_firewall_table"`
 	AFSettings        map[string]*ClientAFConfigFile   `yaml:"address_families"`
 	InitTimeout       int                             `yaml:"init_timeout"`
 	StatsIntervalS    int                             `yaml:"stats_interval_s"`
@@ -59,7 +60,8 @@ type ClientConfig struct {
 	BridgeName       string
 	ClampMSSToMTU    bool
 	NeighSuppress    bool
-	VxlanFirewall    bool
+	VxlanFirewall      bool
+	VxlanFirewallTable string
 	AFSettings       map[types.AFName]*ClientAFConfig
 	InitTimeout      time.Duration
 	StatsInterval    time.Duration
@@ -119,13 +121,19 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		BridgeName:       raw.BridgeName,
 		ClampMSSToMTU:    raw.ClampMSSToMTU,
 		NeighSuppress:    raw.NeighSuppress,
-		VxlanFirewall:    raw.VxlanFirewall,
-		NTPServers:       raw.NTPServers,
+		VxlanFirewall:      raw.VxlanFirewall,
+		VxlanFirewallTable: raw.VxlanFirewallTable,
+		NTPServers:        raw.NTPServers,
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
 		StatsInterval:    time.Duration(statsInterval) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
 		Filters:          filter.ParseFilterConfigFile(raw.Filters),
 		LogLevel:         raw.LogLevel,
+	}
+
+	// Default firewall table name
+	if cfg.VxlanFirewall && cfg.VxlanFirewallTable == "" {
+		cfg.VxlanFirewallTable = "vxlan_fw"
 	}
 
 	// Parse private key

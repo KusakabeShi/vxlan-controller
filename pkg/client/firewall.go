@@ -13,9 +13,13 @@ import (
 // setName returns a sanitized nftables set name for a given AF.
 // e.g. "asia_v4" → "af_asia_v4", "v6" → "af_v6"
 func setName(af types.AFName) string {
-	// nftables set names: alphanumeric + underscore
 	s := strings.ReplaceAll(string(af), "-", "_")
 	return "af_" + s
+}
+
+// fwTable returns the configured nftables table name.
+func (c *Client) fwTable() string {
+	return c.Config.VxlanFirewallTable
 }
 
 // initFirewall creates the nftables table, per-AF sets, and chain for VXLAN source filtering.
@@ -44,15 +48,16 @@ func (c *Client) syncFirewallPeers() {
 	perAF := c.collectPeerIPsPerAF()
 	c.mu.Unlock()
 
+	tbl := c.fwTable()
 	var cmds []string
 	for af, afCfg := range c.Config.AFSettings {
 		if !afCfg.Enable {
 			continue
 		}
 		sn := setName(af)
-		cmds = append(cmds, fmt.Sprintf("flush set inet vxlan_fw %s", sn))
+		cmds = append(cmds, fmt.Sprintf("flush set inet %s %s", tbl, sn))
 		if ips, ok := perAF[af]; ok && len(ips) > 0 {
-			cmds = append(cmds, fmt.Sprintf("add element inet vxlan_fw %s { %s }", sn, strings.Join(ips, ", ")))
+			cmds = append(cmds, fmt.Sprintf("add element inet %s %s { %s }", tbl, sn, strings.Join(ips, ", ")))
 		}
 	}
 
@@ -94,7 +99,7 @@ func (c *Client) cleanupFirewall() {
 	if !c.Config.VxlanFirewall {
 		return
 	}
-	exec.Command("nft", "destroy", "table", "inet", "vxlan_fw").Run()
+	exec.Command("nft", "destroy", "table", "inet", c.fwTable()).Run()
 	vlog.Infof("[Firewall] VXLAN firewall cleaned up")
 }
 
@@ -143,8 +148,9 @@ func (c *Client) collectPeerIPsPerAF() map[types.AFName][]string {
 func (c *Client) buildFirewallRuleset(perAF map[types.AFName][]string) string {
 	var sb strings.Builder
 
-	sb.WriteString("destroy table inet vxlan_fw\n")
-	sb.WriteString("table inet vxlan_fw {\n")
+	tbl := c.fwTable()
+	sb.WriteString(fmt.Sprintf("destroy table inet %s\n", tbl))
+	sb.WriteString(fmt.Sprintf("table inet %s {\n", tbl))
 
 	// Per-AF sets
 	for af, afCfg := range c.Config.AFSettings {
