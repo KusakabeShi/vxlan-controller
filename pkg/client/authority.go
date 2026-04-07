@@ -76,8 +76,9 @@ func (c *Client) authoritySelectLoop() {
 	}
 	c.mu.Unlock()
 
-	// Notify FDB reconciler
+	// Notify FDB reconciler and firewall
 	c.notifyFDB()
+	c.notifyFirewall()
 
 	// Run initial probe now that authority is selected.
 	// The controller's sync_new_client_debounce probe fires before init_timeout,
@@ -111,6 +112,7 @@ func (c *Client) authoritySelectLoop() {
 
 			if changed {
 				c.notifyFDB()
+				c.notifyFirewall()
 			}
 		case <-c.ctx.Done():
 			return

@@ -68,6 +68,7 @@ type Client struct {
 
 	// Channels
 	fdbNotifyCh       chan struct{}
+	fwNotifyCh        chan struct{}
 	authorityChangeCh chan struct{}
 	tapInjectCh       chan []byte
 	initDone          chan struct{} // closed after init_timeout
@@ -157,6 +158,7 @@ func New(cfg *config.ClientConfig) *Client {
 		pendingHandshakes: make(map[types.ClientID]*crypto.HandshakeState),
 		probeResponseChs:  make(map[uint64]chan probeResponseData),
 		fdbNotifyCh:       make(chan struct{}, 1),
+		fwNotifyCh:        make(chan struct{}, 1),
 		authorityChangeCh: make(chan struct{}, 1),
 		tapInjectCh:       make(chan []byte, 256),
 		initDone:          make(chan struct{}),
@@ -198,6 +200,11 @@ func (c *Client) Run() error {
 	// Step 2b: Initialize devices
 	if err := c.initDevices(); err != nil {
 		return fmt.Errorf("init devices: %w", err)
+	}
+
+	// Step 2c: Initialize VXLAN firewall
+	if err := c.initFirewall(); err != nil {
+		return fmt.Errorf("init firewall: %w", err)
 	}
 
 	// Step 3: Collect unique controllers across all AFs
@@ -260,7 +267,10 @@ func (c *Client) Run() error {
 	// Step 8: Start FDB reconciler
 	go c.fdbReconcileLoop()
 
-	// Step 8b: Start mcast stats reporter
+	// Step 8b: Start firewall peer sync loop
+	go c.firewallLoop()
+
+	// Step 8c: Start mcast stats reporter
 	go c.mcastStatsReportLoop()
 
 	// Step 9: Authority selection with init_timeout
@@ -296,6 +306,7 @@ func (c *Client) Stop() {
 	if c.Config.ClampMSSToMTU {
 		c.cleanupNftables()
 	}
+	c.cleanupFirewall()
 
 	// Close all connections and sendqueues
 	c.mu.Lock()
@@ -699,6 +710,7 @@ func (c *Client) handleControllerState(ctrlID types.ControllerID, af types.AFNam
 	c.mu.Unlock()
 
 	c.notifyFDB()
+	c.notifyFirewall()
 }
 
 func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload []byte) {
@@ -709,24 +721,28 @@ func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload 
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	cc, ok := c.Controllers[ctrlID]
 	if !ok || cc.State == nil {
+		c.mu.Unlock()
 		return
 	}
+
+	clientsChanged := false
 
 	switch u := update.Update.(type) {
 	case *pb.ControllerStateUpdate_ClientJoined:
 		civ := protoToClientInfoView(u.ClientJoined.ClientInfo)
 		cc.State.Clients[civ.ClientID] = civ
 		cc.State.ClientCount = len(cc.State.Clients)
+		clientsChanged = true
 
 	case *pb.ControllerStateUpdate_ClientLeft:
 		var clientID types.ClientID
 		copy(clientID[:], u.ClientLeft.ClientId)
 		delete(cc.State.Clients, clientID)
 		cc.State.ClientCount = len(cc.State.Clients)
+		clientsChanged = true
 
 	case *pb.ControllerStateUpdate_RouteMatrixUpdate:
 		cc.State.RouteMatrix = controller.ProtoToRouteMatrix(u.RouteMatrixUpdate.RouteMatrix)
@@ -738,10 +754,16 @@ func (c *Client) handleControllerStateUpdate(ctrlID types.ControllerID, payload 
 	case *pb.ControllerStateUpdate_ClientInfoUpdate:
 		civ := protoToClientInfoView(u.ClientInfoUpdate.ClientInfo)
 		cc.State.Clients[civ.ClientID] = civ
+		clientsChanged = true
 	}
+
+	c.mu.Unlock()
 
 	// Notify FDB reconciler
 	c.notifyFDB()
+	if clientsChanged {
+		c.notifyFirewall()
+	}
 }
 
 func (c *Client) handleControllerProbeRequest(ctrlID types.ControllerID, payload []byte) {
@@ -1061,6 +1083,9 @@ func (c *Client) updateBindAddr(af types.AFName, newAddr netip.Addr) error {
 
 	// Restart probe listener with new bind addr
 	go c.probeListenLoop(af)
+
+	// Rebuild firewall rules (bind addr in chain rules changed)
+	c.fwBindAddrChanged()
 
 	return nil
 }

@@ -299,7 +299,7 @@ YAML
 }
 
 write_client_config() {
-    local node=$1 privkey=$2 neigh_suppress=${3:-false} auto_detect=${4:-false}
+    local node=$1 privkey=$2 neigh_suppress=${3:-false} auto_detect=${4:-false} vxlan_firewall=${5:-false}
     local f="$TMPDIR/client-${node}.yaml"
     local has_v4=false has_v6=false
 
@@ -311,6 +311,7 @@ private_key: "${privkey}"
 bridge_name: "${BRIDGE_NAME}"
 clamp_mss_to_mtu: false
 neigh_suppress: ${neigh_suppress}
+vxlan_firewall: ${vxlan_firewall}
 init_timeout: ${INIT_TIMEOUT}
 ntp_servers: []
 address_families:
