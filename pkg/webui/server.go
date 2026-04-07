@@ -84,9 +84,15 @@ type MACStatsJSON struct {
 }
 
 type RejectReasonJSON struct {
-	Direction string `json:"direction"`
-	Reason    string `json:"reason"`
-	Count     uint64 `json:"count"`
+	Direction string             `json:"direction"`
+	Reason    string             `json:"reason"`
+	Count     uint64             `json:"count"`
+	Details   []RejectDetailJSON `json:"details,omitempty"`
+}
+
+type RejectDetailJSON struct {
+	Detail string `json:"detail"`
+	Count  uint64 `json:"count"`
 }
 
 type UIConfigJSON struct {

@@ -180,8 +180,8 @@ echo "  Changing node-1 v4 IP: ${V4_SUBNET}.1 -> ${V4_SUBNET}.101"
 ip netns exec "node-1" ip addr del "${V4_SUBNET}.1/24" dev eth-v4 2>/dev/null || true
 ip netns exec "node-1" ip addr add "${V4_SUBNET}.101/24" dev eth-v4
 
-echo "  Waiting 40s for auto-detect, reconnection and firewall update..."
-sleep 40
+echo "  Waiting 15s for auto-detect, reconnection and firewall update..."
+sleep 15
 
 run_test "leaf-1 -> leaf-3 (after IP change, with firewall)" \
     ip netns exec "leaf-1" ping -c 3 -W 10 "${LEAF_SUBNET_V4}.3"

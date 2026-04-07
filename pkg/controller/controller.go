@@ -1070,7 +1070,7 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 
 	// Input filter: check source client's filter
 	if srcCC, ok := c.clients[srcID]; ok && srcCC.Filters != nil {
-		if accepted, _ := srcCC.Filters.InputMcast.FilterMcast(fwd.Payload); !accepted {
+		if accepted, _, _ := srcCC.Filters.InputMcast.FilterMcast(fwd.Payload); !accepted {
 			return
 		}
 	}
@@ -1098,7 +1098,7 @@ func (c *Controller) handleMulticastForward(al *AFListener, sourceClientID [32]b
 
 			// Output filter: check destination client's filter
 			if cc.Filters != nil {
-				if accepted, _ := cc.Filters.OutputMcast.FilterMcast(fwd.Payload); !accepted {
+				if accepted, _, _ := cc.Filters.OutputMcast.FilterMcast(fwd.Payload); !accepted {
 					continue
 				}
 			}

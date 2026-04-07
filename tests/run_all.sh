@@ -14,6 +14,8 @@ TESTS=(
     "test_broadcast_relay.sh"
     "test_dual_stack.sh"
     "test_ip_change.sh"
+    "test_no_flood.sh"
+    "test_firewall.sh"
 )
 
 total=0

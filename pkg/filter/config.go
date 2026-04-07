@@ -7,6 +7,7 @@ type FilterConfig struct {
 	InputRoute  string
 	OutputRoute string
 	RateLimit   RateLimitConfig
+	BaseDir     string // working directory for Lua require() and @file paths
 }
 
 // RateLimitConfig specifies rate limits for multicast packets.
@@ -37,8 +38,8 @@ type RateLimitFile struct {
 // DefaultFilterConfig returns a FilterConfig with default scripts and rate limits.
 func DefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
-		InputMcast:  DefaultMcastScript,
-		OutputMcast: DefaultMcastScript,
+		InputMcast:  DefaultInputMcastScript,
+		OutputMcast: DefaultOutputMcastScript,
 		InputRoute:  DefaultRouteScript,
 		OutputRoute: DefaultRouteScript,
 		RateLimit: RateLimitConfig{
@@ -49,8 +50,10 @@ func DefaultFilterConfig() *FilterConfig {
 }
 
 // ParseFilterConfigFile converts a FilterConfigFile to FilterConfig, filling defaults.
-func ParseFilterConfigFile(f *FilterConfigFile) *FilterConfig {
+// baseDir is the directory used for resolving relative Lua file paths and require().
+func ParseFilterConfigFile(f *FilterConfigFile, baseDir string) *FilterConfig {
 	cfg := DefaultFilterConfig()
+	cfg.BaseDir = baseDir
 
 	if f == nil {
 		return cfg
@@ -104,19 +107,19 @@ func NewFilterSet(cfg *FilterConfig) (*FilterSet, error) {
 		cfg = DefaultFilterConfig()
 	}
 
-	inputMcast, err := NewFilterEngine(cfg.InputMcast, &cfg.RateLimit)
+	inputMcast, err := NewFilterEngine(cfg.InputMcast, &cfg.RateLimit, cfg.BaseDir)
 	if err != nil {
 		return nil, err
 	}
-	outputMcast, err := NewFilterEngine(cfg.OutputMcast, &cfg.RateLimit)
+	outputMcast, err := NewFilterEngine(cfg.OutputMcast, &cfg.RateLimit, cfg.BaseDir)
 	if err != nil {
 		return nil, err
 	}
-	inputRoute, err := NewFilterEngine(cfg.InputRoute, nil)
+	inputRoute, err := NewFilterEngine(cfg.InputRoute, nil, cfg.BaseDir)
 	if err != nil {
 		return nil, err
 	}
-	outputRoute, err := NewFilterEngine(cfg.OutputRoute, nil)
+	outputRoute, err := NewFilterEngine(cfg.OutputRoute, nil, cfg.BaseDir)
 	if err != nil {
 		return nil, err
 	}

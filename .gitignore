@@ -1,9 +1,6 @@
 # Binaries
-vxlan-controller
-vxlan-client
-keygen
-/controller
-/client
+/vxlan-controller
+/vxlan-controller-*
 
 # Test artifacts
 test.sh

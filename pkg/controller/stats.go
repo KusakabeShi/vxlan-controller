@@ -24,11 +24,18 @@ type MACMcastStats struct {
 	RejectReasons []RejectReason
 }
 
-// RejectReason is a single reason + count.
+// RejectReason is a single reason + count with optional detail breakdown.
 type RejectReason struct {
 	Direction string // "tx" or "rx"
 	Reason    string
 	Count     uint64
+	Details   []RejectDetail
+}
+
+// RejectDetail is a single deduped detail entry within a reason.
+type RejectDetail struct {
+	Detail string
+	Count  uint64
 }
 
 func (c *Controller) handleMcastStatsReport(cc *ClientConn, payload []byte) {
@@ -50,11 +57,18 @@ func (c *Controller) handleMcastStatsReport(cc *ClientConn, payload []byte) {
 			RxRejected: ms.RxRejected,
 		}
 		for _, rr := range ms.RejectReasons {
-			entry.RejectReasons = append(entry.RejectReasons, RejectReason{
+			r := RejectReason{
 				Direction: rr.Direction,
 				Reason:    rr.Reason,
 				Count:     rr.Count,
-			})
+			}
+			for _, d := range rr.Details {
+				r.Details = append(r.Details, RejectDetail{
+					Detail: d.Detail,
+					Count:  d.Count,
+				})
+			}
+			entry.RejectReasons = append(entry.RejectReasons, r)
 		}
 		stats.MACs[mac] = entry
 	}

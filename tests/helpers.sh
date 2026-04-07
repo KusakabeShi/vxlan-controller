@@ -12,7 +12,7 @@ COMM_PORT=5000
 PROBE_PORT=5010
 VXLAN_DSTPORT=4789
 VXLAN_MTU=1400
-INIT_TIMEOUT=5
+INIT_TIMEOUT=3
 
 V4_SUBNET="192.168.47"
 V6_PREFIX="fd87:4789::"
@@ -32,8 +32,7 @@ test_total=0
 build_binaries() {
     echo "=== Building binaries ==="
     cd "$PROJECT_DIR"
-    go build -o vxlan-controller ./cmd/controller/
-    go build -o vxlan-client ./cmd/client/
+    go build -o vxlan-controller ./cmd/vxlan-controller/
 }
 
 # =========================================
@@ -69,7 +68,7 @@ cleanup() {
 }
 
 pre_cleanup() {
-    pkill -f "vxlan-controller\|vxlan-client" 2>/dev/null || true
+    pkill -x "vxlan-controller" 2>/dev/null || true
     sleep 0.5
     for i in 1 2 3 4 5 6 10; do
         ip netns del "node-$i" 2>/dev/null || true
@@ -248,16 +247,16 @@ write_controller_config() {
     local f="$TMPDIR/controller-${node}.yaml"
     cat > "$f" << YAML
 private_key: "${privkey}"
-client_offline_timeout: 30
-sync_new_client_debounce: 2
-sync_new_client_debounce_max: 5
+client_offline_timeout: 8
+sync_new_client_debounce: 1
+sync_new_client_debounce_max: 2
 topology_update_debounce: 1
-topology_update_debounce_max: 3
+topology_update_debounce_max: 2
 probing:
-  probe_interval_s: 30
+  probe_interval_s: 5
   probe_times: 3
-  in_probe_interval_ms: 100
-  probe_timeout_ms: 2000
+  in_probe_interval_ms: 50
+  probe_timeout_ms: 1000
 address_families:
   v4:
     enable: true
@@ -416,8 +415,8 @@ generate_all_configs() {
 # Process management
 # =========================================
 start_process() {
-    local ns=$1 binary=$2 config=$3 logname=$4
-    ip netns exec "$ns" "$PROJECT_DIR/$binary" -config "$config" -log-level verbose > "$TMPDIR/${logname}.log" 2>&1 &
+    local ns=$1 mode=$2 config=$3 logname=$4
+    ip netns exec "$ns" "$PROJECT_DIR/vxlan-controller" -mode "$mode" -config "$config" -log-level verbose > "$TMPDIR/${logname}.log" 2>&1 &
     local pid=$!
     CLEANUP_PIDS+=("$pid")
     echo "  $logname started (PID=$pid)"
@@ -425,23 +424,23 @@ start_process() {
 
 start_controllers() {
     echo "=== Starting controllers ==="
-    start_process "node-10" vxlan-controller "$CTRL_10_CONF" "ctrl-10"
-    start_process "node-4"  vxlan-controller "$CTRL_4_CONF"  "ctrl-4"
+    start_process "node-10" controller "$CTRL_10_CONF" "ctrl-10"
+    start_process "node-4"  controller "$CTRL_4_CONF"  "ctrl-4"
     sleep 2
 }
 
 start_clients() {
     echo "=== Starting clients ==="
-    start_process "node-1" vxlan-client "$CLIENT_1_CONF" "client-1"
-    start_process "node-2" vxlan-client "$CLIENT_2_CONF" "client-2"
-    start_process "node-3" vxlan-client "$CLIENT_3_CONF" "client-3"
-    start_process "node-4" vxlan-client "$CLIENT_4_CONF" "client-4"
-    start_process "node-5" vxlan-client "$CLIENT_5_CONF" "client-5"
-    start_process "node-6" vxlan-client "$CLIENT_6_CONF" "client-6"
+    start_process "node-1" client "$CLIENT_1_CONF" "client-1"
+    start_process "node-2" client "$CLIENT_2_CONF" "client-2"
+    start_process "node-3" client "$CLIENT_3_CONF" "client-3"
+    start_process "node-4" client "$CLIENT_4_CONF" "client-4"
+    start_process "node-5" client "$CLIENT_5_CONF" "client-5"
+    start_process "node-6" client "$CLIENT_6_CONF" "client-6"
 }
 
 wait_converge() {
-    local wait=$((INIT_TIMEOUT + 15))
+    local wait=$((INIT_TIMEOUT + 10))
     echo "=== Waiting ${wait}s for convergence ==="
     sleep $wait
 }

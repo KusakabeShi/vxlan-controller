@@ -1,0 +1,59 @@
+# Demo config for WebUI mock mode
+# Usage: go run ./cmd/controller -config tests/webui/demo.yaml -mock
+#
+# Keys are dummy values (not used in mock mode).
+
+private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+log_level: info
+
+client_offline_timeout: 300
+sync_new_client_debounce: 2
+sync_new_client_debounce_max: 10
+topology_update_debounce: 1
+topology_update_debounce_max: 5
+
+probing:
+  probe_interval_s: 60
+  probe_times: 5
+  in_probe_interval_ms: 200
+  probe_timeout_ms: 1000
+
+address_families:
+  v4:
+    enable: true
+    bind_addr: "127.0.0.1"
+    communication_port: 5000
+
+web_ui:
+  bind_addr: "0.0.0.0:8080"
+  mac_aliases:
+    "aa:bb:cc:00:01:01": "iPhone-13"
+    "aa:bb:cc:00:01:02": "MacBook-Pro"
+    "aa:bb:cc:00:02:01": "Samsung-S24"
+    "aa:bb:cc:00:02:02": "Dell-Server"
+    "aa:bb:cc:00:03:01": "iPad-Air"
+    "aa:bb:cc:00:04:01": "Pixel-8"
+  nodes:
+    taiwan:
+      label: "Taiwan"
+      pos: [2, 1]
+    tokyo:
+      label: "Tokyo"
+      pos: [2, 0]
+    us-west:
+      label: "US-West"
+      pos: [0, 1]
+    europe:
+      label: "Europe"
+      pos: [0, 0]
+
+allowed_clients:
+  - client_id: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+    client_name: "taiwan"
+  - client_id: "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+    client_name: "tokyo"
+  - client_id: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="
+    client_name: "us-west"
+  - client_id: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ="
+    client_name: "europe"

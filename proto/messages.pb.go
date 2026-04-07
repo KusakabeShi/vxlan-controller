@@ -1531,8 +1531,9 @@ func (x *MACMcastStats) GetRejectReasons() []*McastRejectReason {
 type McastRejectReason struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Direction     string                 `protobuf:"bytes,1,opt,name=direction,proto3" json:"direction,omitempty"` // "tx" or "rx"
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`       // e.g. "rate_limited", "dhcp", "ospf"
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`       // e.g. "rate_limited", "ipv4:udp:5353"
 	Count         uint64                 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Details       []*McastRejectDetail   `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"` // per-detail breakdown (deduped)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1588,6 +1589,65 @@ func (x *McastRejectReason) GetCount() uint64 {
 	return 0
 }
 
+func (x *McastRejectReason) GetDetails() []*McastRejectDetail {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+type McastRejectDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Detail        string                 `protobuf:"bytes,1,opt,name=detail,proto3" json:"detail,omitempty"` // e.g. "10.1.0.5 -> 224.0.0.251"
+	Count         uint64                 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *McastRejectDetail) Reset() {
+	*x = McastRejectDetail{}
+	mi := &file_proto_messages_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *McastRejectDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*McastRejectDetail) ProtoMessage() {}
+
+func (x *McastRejectDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_messages_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use McastRejectDetail.ProtoReflect.Descriptor instead.
+func (*McastRejectDetail) Descriptor() ([]byte, []int) {
+	return file_proto_messages_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *McastRejectDetail) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *McastRejectDetail) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
 // Broadcast relay
 type MulticastForward struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -1599,7 +1659,7 @@ type MulticastForward struct {
 
 func (x *MulticastForward) Reset() {
 	*x = MulticastForward{}
-	mi := &file_proto_messages_proto_msgTypes[26]
+	mi := &file_proto_messages_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1611,7 +1671,7 @@ func (x *MulticastForward) String() string {
 func (*MulticastForward) ProtoMessage() {}
 
 func (x *MulticastForward) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_messages_proto_msgTypes[26]
+	mi := &file_proto_messages_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1624,7 +1684,7 @@ func (x *MulticastForward) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MulticastForward.ProtoReflect.Descriptor instead.
 func (*MulticastForward) Descriptor() ([]byte, []int) {
-	return file_proto_messages_proto_rawDescGZIP(), []int{26}
+	return file_proto_messages_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MulticastForward) GetSourceClientId() []byte {
@@ -1651,7 +1711,7 @@ type MulticastDeliver struct {
 
 func (x *MulticastDeliver) Reset() {
 	*x = MulticastDeliver{}
-	mi := &file_proto_messages_proto_msgTypes[27]
+	mi := &file_proto_messages_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1663,7 +1723,7 @@ func (x *MulticastDeliver) String() string {
 func (*MulticastDeliver) ProtoMessage() {}
 
 func (x *MulticastDeliver) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_messages_proto_msgTypes[27]
+	mi := &file_proto_messages_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1676,7 +1736,7 @@ func (x *MulticastDeliver) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MulticastDeliver.ProtoReflect.Descriptor instead.
 func (*MulticastDeliver) Descriptor() ([]byte, []int) {
-	return file_proto_messages_proto_rawDescGZIP(), []int{27}
+	return file_proto_messages_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *MulticastDeliver) GetSourceClientId() []byte {
@@ -1828,11 +1888,15 @@ const file_proto_messages_proto_rawDesc = "" +
 	"rxAccepted\x12\x1f\n" +
 	"\vrx_rejected\x18\x05 \x01(\x04R\n" +
 	"rxRejected\x12I\n" +
-	"\x0ereject_reasons\x18\x06 \x03(\v2\".vxlancontroller.McastRejectReasonR\rrejectReasons\"_\n" +
+	"\x0ereject_reasons\x18\x06 \x03(\v2\".vxlancontroller.McastRejectReasonR\rrejectReasons\"\x9d\x01\n" +
 	"\x11McastRejectReason\x12\x1c\n" +
 	"\tdirection\x18\x01 \x01(\tR\tdirection\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x04R\x05count\"V\n" +
+	"\x05count\x18\x03 \x01(\x04R\x05count\x12<\n" +
+	"\adetails\x18\x04 \x03(\v2\".vxlancontroller.McastRejectDetailR\adetails\"A\n" +
+	"\x11McastRejectDetail\x12\x16\n" +
+	"\x06detail\x18\x01 \x01(\tR\x06detail\x12\x14\n" +
+	"\x05count\x18\x02 \x01(\x04R\x05count\"V\n" +
 	"\x10MulticastForward\x12(\n" +
 	"\x10source_client_id\x18\x01 \x01(\fR\x0esourceClientId\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\"V\n" +
@@ -1852,7 +1916,7 @@ func file_proto_messages_proto_rawDescGZIP() []byte {
 	return file_proto_messages_proto_rawDescData
 }
 
-var file_proto_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_proto_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_proto_messages_proto_goTypes = []any{
 	(*ClientRegister)(nil),         // 0: vxlancontroller.ClientRegister
 	(*AFEndpoint)(nil),             // 1: vxlancontroller.AFEndpoint
@@ -1880,22 +1944,23 @@ var file_proto_messages_proto_goTypes = []any{
 	(*McastStatsReport)(nil),       // 23: vxlancontroller.McastStatsReport
 	(*MACMcastStats)(nil),          // 24: vxlancontroller.MACMcastStats
 	(*McastRejectReason)(nil),      // 25: vxlancontroller.McastRejectReason
-	(*MulticastForward)(nil),       // 26: vxlancontroller.MulticastForward
-	(*MulticastDeliver)(nil),       // 27: vxlancontroller.MulticastDeliver
-	nil,                            // 28: vxlancontroller.ClientRegister.AfEndpointsEntry
-	nil,                            // 29: vxlancontroller.ControllerState.ClientsEntry
-	nil,                            // 30: vxlancontroller.ClientInfoProto.EndpointsEntry
-	nil,                            // 31: vxlancontroller.RouteTableEntryProto.OwnersEntry
-	nil,                            // 32: vxlancontroller.ProbeResults.ResultsEntry
-	nil,                            // 33: vxlancontroller.ProbeResultEntry.AfResultsEntry
+	(*McastRejectDetail)(nil),      // 26: vxlancontroller.McastRejectDetail
+	(*MulticastForward)(nil),       // 27: vxlancontroller.MulticastForward
+	(*MulticastDeliver)(nil),       // 28: vxlancontroller.MulticastDeliver
+	nil,                            // 29: vxlancontroller.ClientRegister.AfEndpointsEntry
+	nil,                            // 30: vxlancontroller.ControllerState.ClientsEntry
+	nil,                            // 31: vxlancontroller.ClientInfoProto.EndpointsEntry
+	nil,                            // 32: vxlancontroller.RouteTableEntryProto.OwnersEntry
+	nil,                            // 33: vxlancontroller.ProbeResults.ResultsEntry
+	nil,                            // 34: vxlancontroller.ProbeResultEntry.AfResultsEntry
 }
 var file_proto_messages_proto_depIdxs = []int32{
-	28, // 0: vxlancontroller.ClientRegister.af_endpoints:type_name -> vxlancontroller.ClientRegister.AfEndpointsEntry
+	29, // 0: vxlancontroller.ClientRegister.af_endpoints:type_name -> vxlancontroller.ClientRegister.AfEndpointsEntry
 	3,  // 1: vxlancontroller.MACUpdate.routes:type_name -> vxlancontroller.Type2Route
-	29, // 2: vxlancontroller.ControllerState.clients:type_name -> vxlancontroller.ControllerState.ClientsEntry
+	30, // 2: vxlancontroller.ControllerState.clients:type_name -> vxlancontroller.ControllerState.ClientsEntry
 	13, // 3: vxlancontroller.ControllerState.route_matrix:type_name -> vxlancontroller.RouteMatrixProto
 	16, // 4: vxlancontroller.ControllerState.route_table:type_name -> vxlancontroller.RouteTableEntryProto
-	30, // 5: vxlancontroller.ClientInfoProto.endpoints:type_name -> vxlancontroller.ClientInfoProto.EndpointsEntry
+	31, // 5: vxlancontroller.ClientInfoProto.endpoints:type_name -> vxlancontroller.ClientInfoProto.EndpointsEntry
 	3,  // 6: vxlancontroller.ClientInfoProto.routes:type_name -> vxlancontroller.Type2Route
 	8,  // 7: vxlancontroller.ControllerStateUpdate.client_joined:type_name -> vxlancontroller.ClientJoined
 	9,  // 8: vxlancontroller.ControllerStateUpdate.client_left:type_name -> vxlancontroller.ClientLeft
@@ -1908,21 +1973,22 @@ var file_proto_messages_proto_depIdxs = []int32{
 	5,  // 15: vxlancontroller.ClientInfoUpdateProto.client_info:type_name -> vxlancontroller.ClientInfoProto
 	14, // 16: vxlancontroller.RouteMatrixProto.rows:type_name -> vxlancontroller.RouteMatrixRow
 	15, // 17: vxlancontroller.RouteMatrixRow.cells:type_name -> vxlancontroller.RouteMatrixCell
-	31, // 18: vxlancontroller.RouteTableEntryProto.owners:type_name -> vxlancontroller.RouteTableEntryProto.OwnersEntry
-	32, // 19: vxlancontroller.ProbeResults.results:type_name -> vxlancontroller.ProbeResults.ResultsEntry
-	33, // 20: vxlancontroller.ProbeResultEntry.af_results:type_name -> vxlancontroller.ProbeResultEntry.AfResultsEntry
+	32, // 18: vxlancontroller.RouteTableEntryProto.owners:type_name -> vxlancontroller.RouteTableEntryProto.OwnersEntry
+	33, // 19: vxlancontroller.ProbeResults.results:type_name -> vxlancontroller.ProbeResults.ResultsEntry
+	34, // 20: vxlancontroller.ProbeResultEntry.af_results:type_name -> vxlancontroller.ProbeResultEntry.AfResultsEntry
 	24, // 21: vxlancontroller.McastStatsReport.mac_stats:type_name -> vxlancontroller.MACMcastStats
 	25, // 22: vxlancontroller.MACMcastStats.reject_reasons:type_name -> vxlancontroller.McastRejectReason
-	1,  // 23: vxlancontroller.ClientRegister.AfEndpointsEntry.value:type_name -> vxlancontroller.AFEndpoint
-	5,  // 24: vxlancontroller.ControllerState.ClientsEntry.value:type_name -> vxlancontroller.ClientInfoProto
-	6,  // 25: vxlancontroller.ClientInfoProto.EndpointsEntry.value:type_name -> vxlancontroller.EndpointProto
-	19, // 26: vxlancontroller.ProbeResults.ResultsEntry.value:type_name -> vxlancontroller.ProbeResultEntry
-	20, // 27: vxlancontroller.ProbeResultEntry.AfResultsEntry.value:type_name -> vxlancontroller.AFProbeResult
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	26, // 23: vxlancontroller.McastRejectReason.details:type_name -> vxlancontroller.McastRejectDetail
+	1,  // 24: vxlancontroller.ClientRegister.AfEndpointsEntry.value:type_name -> vxlancontroller.AFEndpoint
+	5,  // 25: vxlancontroller.ControllerState.ClientsEntry.value:type_name -> vxlancontroller.ClientInfoProto
+	6,  // 26: vxlancontroller.ClientInfoProto.EndpointsEntry.value:type_name -> vxlancontroller.EndpointProto
+	19, // 27: vxlancontroller.ProbeResults.ResultsEntry.value:type_name -> vxlancontroller.ProbeResultEntry
+	20, // 28: vxlancontroller.ProbeResultEntry.AfResultsEntry.value:type_name -> vxlancontroller.AFProbeResult
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_proto_messages_proto_init() }
@@ -1943,7 +2009,7 @@ func file_proto_messages_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_messages_proto_rawDesc), len(file_proto_messages_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   34,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

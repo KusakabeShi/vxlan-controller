@@ -303,10 +303,9 @@ func (c *Client) executeProbe(req *pb.ControllerProbeRequest) {
 		select {
 		case resp := <-responseCh:
 			// Single-way latency: local → peer (NTP-synced clocks)
+			// Negative values are valid (clock skew); sign cancels on any
+			// end-to-end path, so routing correctness is preserved.
 			latency := float64(resp.dstTimestamp-resp.srcTimestamp) / 1e6 // ms
-			if latency < 0 {
-				latency = -latency // clock skew compensation
-			}
 
 			key := latKey{clientID: resp.peerID, af: resp.af}
 			latMu.Lock()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,6 +103,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	configDir := filepath.Dir(path)
 
 	// Start from defaults, then overlay user config
 	raw := DefaultClientConfig
@@ -130,7 +132,7 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 		InitTimeout:      time.Duration(raw.InitTimeout) * time.Second,
 		StatsInterval:    time.Duration(statsInterval) * time.Second,
 		NTPPeriod:        time.Duration(raw.NTPPeriodH) * time.Hour,
-		Filters:          filter.ParseFilterConfigFile(raw.Filters),
+		Filters:          filter.ParseFilterConfigFile(raw.Filters, configDir),
 		LogLevel:         raw.LogLevel,
 	}
 

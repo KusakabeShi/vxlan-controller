@@ -123,11 +123,18 @@ func (c *Controller) buildStateSnapshot() *webui.StateSnapshot {
 				RxRejected: ms.RxRejected,
 			}
 			for _, rr := range ms.RejectReasons {
-				entry.RejectReasons = append(entry.RejectReasons, webui.RejectReasonJSON{
+				rj := webui.RejectReasonJSON{
 					Direction: rr.Direction,
 					Reason:    rr.Reason,
 					Count:     rr.Count,
-				})
+				}
+				for _, d := range rr.Details {
+					rj.Details = append(rj.Details, webui.RejectDetailJSON{
+						Detail: d.Detail,
+						Count:  d.Count,
+					})
+				}
+				entry.RejectReasons = append(entry.RejectReasons, rj)
 			}
 			macStats = append(macStats, entry)
 		}

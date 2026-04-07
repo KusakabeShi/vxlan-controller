@@ -1,23 +1,35 @@
 package filter
 
-// DefaultMcastScript only allows ARP and IPv6 Neighbor Discovery (RS/RA/NS/NA).
-const DefaultMcastScript = `
+// DefaultOutputMcastScript allows all multicast by default.
+// To use a preset filter, set output_mcast in config:
+//
+//	filters:
+//	  output_mcast: |
+//	    local f = require("filter")
+//	    filter = f.filter_home_lan
+//
+// Available presets: filter_allow_all, filter_ix_lan, filter_home_lan, filter_isp
+// Returns: bool accepted, string reason, string detail
+const DefaultOutputMcastScript = `
+-- local f = require("filter")
+-- filter = f.filter_home_lan
 function filter(pkt)
-  -- ARP
-  if pkt.ethertype == 0x0806 then return true end
-  -- IPv6 ND: RS(133), RA(134), NS(135), NA(136)
-  if pkt.ethertype == 0x86dd and pkt.icmpv6_type then
-    local t = pkt.icmpv6_type
-    if t >= 133 and t <= 136 then return true end
-  end
-  return false
+  return true
+end
+`
+
+// DefaultInputMcastScript accepts all inbound multicast on the rx path.
+// Tx-side filtering is preferred; input filter is for defensive/untrusted scenarios.
+const DefaultInputMcastScript = `
+function filter(pkt)
+  return true, nil, nil
 end
 `
 
 // DefaultRouteScript accepts all routes.
 const DefaultRouteScript = `
 function filter(route)
-  return true
+  return true, nil, nil
 end
 `
 

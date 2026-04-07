@@ -608,8 +608,8 @@ func (c *Client) commUDPReadLoop(ctrlID types.ControllerID, af types.AFName, con
 			vlog.Debugf("[Client] received MulticastDeliver: %d byte frame", len(deliver.Payload))
 
 			// Filter inbound multicast
-			accepted, reason := c.Filters.InputMcast.FilterMcast(deliver.Payload)
-			c.mcastStats.RecordRx(deliver.Payload, accepted, reason)
+			accepted, reason, detail := c.Filters.InputMcast.FilterMcast(deliver.Payload)
+			c.mcastStats.RecordRx(deliver.Payload, accepted, reason, detail)
 			if !accepted {
 				continue
 			}

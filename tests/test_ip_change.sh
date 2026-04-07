@@ -58,8 +58,8 @@ ip netns exec "node-5" ip addr del "${V6_PREFIX}5/64" dev eth-v6 2>/dev/null || 
 ip netns exec "node-5" ip addr add "${V6_PREFIX}105/64" dev eth-v6
 
 # Wait for debounce (1s) + reconnection + state sync + probe cycle
-echo "  Waiting 40s for auto-detect, reconnection and state sync..."
-sleep 40
+echo "  Waiting 15s for auto-detect, reconnection and state sync..."
+sleep 15
 
 # Verify connectivity with new IPs
 run_test "leaf-1 -> leaf-3 (after IP change)" \

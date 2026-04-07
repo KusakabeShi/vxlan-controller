@@ -160,8 +160,14 @@ message MACMcastStats {
 
 message McastRejectReason {
   string direction = 1; // "tx" or "rx"
-  string reason = 2;    // e.g. "rate_limited", "dhcp", "ospf"
+  string reason = 2;    // e.g. "rate_limited", "ipv4:udp:5353"
   uint64 count = 3;
+  repeated McastRejectDetail details = 4; // per-detail breakdown (deduped)
+}
+
+message McastRejectDetail {
+  string detail = 1; // e.g. "10.1.0.5 -> 224.0.0.251"
+  uint64 count = 2;
 }
 
 // Broadcast relay

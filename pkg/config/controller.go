@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -116,6 +117,7 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	configDir := filepath.Dir(path)
 
 	// Start from defaults, then overlay user config
 	raw := DefaultControllerConfig
@@ -205,7 +207,7 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 	for _, clientRaw := range raw.AllowedClients {
 		pc := types.PerClientConfig{
 			ClientName: clientRaw.ClientName,
-			Filters:    filter.ParseFilterConfigFile(clientRaw.Filters),
+			Filters:    filter.ParseFilterConfigFile(clientRaw.Filters, configDir),
 		}
 
 		pubBytes, err := base64.StdEncoding.DecodeString(clientRaw.ClientID)

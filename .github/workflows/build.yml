@@ -9,6 +9,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
     steps:
       - uses: actions/checkout@v4
 
@@ -16,11 +26,32 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build all binaries
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: "0"
         run: |
-          go build -o vxlan-controller ./cmd/controller
-          go build -o vxlan-client ./cmd/client
-          go build -o keygen ./cmd/keygen
+          suffix="${{ matrix.goarch }}"
+          [ -n "${{ matrix.goarm }}" ] && suffix="${suffix}v${{ matrix.goarm }}"
+          version="${GITHUB_REF_NAME:-dev}"
+          go build -trimpath -ldflags="-s -w -X main.Version=${version}" -o "vxlan-controller-${suffix}" ./cmd/vxlan-controller
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vxlan-controller-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
+          path: vxlan-controller-*
+
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Vet
         run: go vet ./...

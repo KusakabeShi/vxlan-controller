@@ -29,15 +29,15 @@ run_test "baseline: leaf-1 -> leaf-5" \
 # Kill Client-3
 echo "  Killing Client-3..."
 kill_by_log "client-3\|client.*3" || true
-sleep 15  # Wait for offline detection + topology recompute
+sleep 10  # Wait for offline detection + topology recompute
 
 run_test "leaf-1 -> leaf-5 (node-3 down)" \
     ip netns exec "leaf-1" ping -c 3 -W 10 "${LEAF_SUBNET_V4}.5"
 
 # Restore Client-3
 echo "  Restarting Client-3..."
-start_process "node-3" vxlan-client "$CLIENT_3_CONF" "client-3-2"
-sleep 15  # Wait for reconnect + probe + topology update
+start_process "node-3" client "$CLIENT_3_CONF" "client-3-2"
+sleep 10  # Wait for reconnect + probe + topology update
 
 run_test "leaf-1 -> leaf-5 (node-3 restored)" \
     ip netns exec "leaf-1" ping -c 3 -W 10 "${LEAF_SUBNET_V4}.5"

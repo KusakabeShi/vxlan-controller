@@ -36,7 +36,7 @@ run_test "baseline: leaf-3 -> leaf-5" \
 # Step 2: Kill Controller-10
 echo "  Killing Controller-10..."
 kill_by_log "controller-10\|ctrl.*10" || true
-sleep 8
+sleep 5
 
 echo "  Testing with Controller-10 down..."
 run_test "leaf-1 -> leaf-2 (ctrl-10 down)" \
@@ -46,8 +46,8 @@ run_test "leaf-3 -> leaf-5 (ctrl-10 down)" \
 
 # Step 4: Restore Controller-10
 echo "  Restarting Controller-10..."
-start_process "node-10" vxlan-controller "$CTRL_10_CONF" "ctrl-10-2"
-sleep 10
+start_process "node-10" controller "$CTRL_10_CONF" "ctrl-10-2"
+sleep 8
 
 run_test "leaf-1 -> leaf-6 (ctrl-10 restored)" \
     ip netns exec "leaf-1" ping -c 2 -W 5 "${LEAF_SUBNET_V4}.6"
@@ -55,7 +55,7 @@ run_test "leaf-1 -> leaf-6 (ctrl-10 restored)" \
 # Step 6: Kill Controller-4
 echo "  Killing Controller-4..."
 kill_by_log "controller-4\|ctrl.*4" || true
-sleep 8
+sleep 5
 
 echo "  Testing with Controller-4 down..."
 run_test "leaf-1 -> leaf-2 (ctrl-4 down)" \
@@ -65,8 +65,8 @@ run_test "leaf-3 -> leaf-5 (ctrl-4 down)" \
 
 # Step 8: Restore Controller-4
 echo "  Restarting Controller-4..."
-start_process "node-4" vxlan-controller "$CTRL_4_CONF" "ctrl-4-2"
-sleep 15
+start_process "node-4" controller "$CTRL_4_CONF" "ctrl-4-2"
+sleep 13
 
 run_test "leaf-1 -> leaf-6 (ctrl-4 restored)" \
     ip netns exec "leaf-1" ping -c 2 -W 5 "${LEAF_SUBNET_V4}.6"
