@@ -72,7 +72,8 @@ type AFLatency struct {
 
 // LatencyInfo stores all per-AF probe data between a src→dst client pair.
 type LatencyInfo struct {
-	AFs map[AFName]*AFLatency
+	AFs           map[AFName]*AFLatency
+	LastReachable time.Time // last time any AF was reachable (packet_loss < 1.0)
 }
 
 // BestPath selects the best AF and returns (af, cost).

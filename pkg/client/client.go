@@ -55,6 +55,9 @@ type Client struct {
 	// NTP
 	ntp *ntp.TimeSync
 
+	// Addr watch
+	addrEngines map[types.AFName]*filter.AddrSelectEngine
+
 	// Probe
 	probeConns         map[types.AFName]*net.UDPConn
 	probeSessions      *crypto.SessionManager
@@ -148,6 +151,7 @@ func New(cfg *config.ClientConfig) *Client {
 		Filters:           filters,
 		mcastStats:        newMcastStats(),
 		ntp:               ntp.New(cfg.NTPServers),
+		addrEngines:       make(map[types.AFName]*filter.AddrSelectEngine),
 		probeConns:        make(map[types.AFName]*net.UDPConn),
 		probeSessions:     crypto.NewSessionManager(),
 		pendingHandshakes: make(map[types.ClientID]*crypto.HandshakeState),
@@ -158,6 +162,18 @@ func New(cfg *config.ClientConfig) *Client {
 		initDone:          make(chan struct{}),
 		ctx:               ctx,
 		cancel:            cancel,
+	}
+
+	// Initialize addr select engines for AFs with autoip_interface
+	for afName, afCfg := range cfg.AFSettings {
+		if afCfg.AutoIPInterface == "" {
+			continue
+		}
+		engine, err := filter.NewAddrSelectEngine(afCfg.AddrSelectScript)
+		if err != nil {
+			vlog.Fatalf("[Client] AF=%s: failed to initialize addr_select: %v", afName, err)
+		}
+		c.addrEngines[afName] = engine
 	}
 
 	return c
@@ -172,7 +188,14 @@ func (c *Client) Run() error {
 	// Wait a moment for first NTP sync
 	time.Sleep(500 * time.Millisecond)
 
-	// Step 2: Initialize devices
+	// Step 2a: Resolve initial bind addrs for autoip_interface AFs
+	for afName, afCfg := range c.Config.AFSettings {
+		if afCfg.AutoIPInterface != "" {
+			c.resolveInitialBindAddr(afName)
+		}
+	}
+
+	// Step 2b: Initialize devices
 	if err := c.initDevices(); err != nil {
 		return fmt.Errorf("init devices: %w", err)
 	}
@@ -223,6 +246,9 @@ func (c *Client) Run() error {
 		}
 		go c.probeListenLoop(afName)
 	}
+
+	// Step 5b: Start addr watch for autoip_interface AFs
+	go c.addrWatchLoop()
 
 	// Step 6: Start neighbor watch
 	go c.neighborWatchLoop()
@@ -291,6 +317,10 @@ func (c *Client) Stop() {
 	c.mu.Unlock()
 
 	c.Filters.Close()
+
+	for _, engine := range c.addrEngines {
+		engine.Close()
+	}
 }
 
 func (c *Client) tcpConnLoop(ctrlID types.ControllerID, af types.AFName, ctrl config.ControllerEndpoint) {
@@ -332,6 +362,10 @@ func (c *Client) tcpConnLoop(ctrlID types.ControllerID, af types.AFName, ctrl co
 
 func (c *Client) connectToController(ctrlID types.ControllerID, af types.AFName, ctrl config.ControllerEndpoint) error {
 	afCfg := c.Config.AFSettings[af]
+
+	if !afCfg.BindAddr.IsValid() {
+		return fmt.Errorf("no bind_addr resolved yet (autoip_interface pending)")
+	}
 
 	// Bind to local addr
 	localAddr := &net.TCPAddr{

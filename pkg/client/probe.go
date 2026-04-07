@@ -28,9 +28,21 @@ func (c *Client) probeListenLoop(af types.AFName) {
 		return
 	}
 
-	conn, err := net.ListenUDP("udp", udpAddr)
+	// Retry bind with backoff (IPv6 DAD may delay address availability)
+	var conn *net.UDPConn
+	for attempt := 0; attempt < 10; attempt++ {
+		conn, err = net.ListenUDP("udp", udpAddr)
+		if err == nil {
+			break
+		}
+		select {
+		case <-time.After(time.Duration(attempt+1) * 500 * time.Millisecond):
+		case <-c.ctx.Done():
+			return
+		}
+	}
 	if err != nil {
-		vlog.Errorf("[Client] probe listen error on %s: %v", bindStr, err)
+		vlog.Errorf("[Client] probe listen error on %s after retries: %v", bindStr, err)
 		return
 	}
 	defer conn.Close()

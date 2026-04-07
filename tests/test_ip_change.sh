@@ -1,10 +1,11 @@
 #!/bin/bash
-# Test 7: IP change
-# Verify that changing a client's bind_addr via the API:
-# 1. Updates the VXLAN device's local source IP
-# 2. Reconnects TCP/UDP sessions with the new IP
-# 3. Controller updates client IP and pushes to other nodes
-# 4. Other nodes update their FDB entries to use the new IP
+# Test 7: IP change via autoip_interface
+# Verify that changing a client's IP on a monitored interface:
+# 1. Auto-detects the new IP via netlink addr events
+# 2. Updates the VXLAN device's local source IP
+# 3. Reconnects TCP/UDP sessions with the new IP
+# 4. Controller updates client IP and pushes to other nodes
+# 5. Other nodes update their FDB entries to use the new IP
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
@@ -15,14 +16,22 @@ generate_keys
 setup_topology
 
 echo "=== Generating configurations ==="
-generate_all_configs false
+# Use autoip_interface for nodes 1, 3, 5 (the ones that will change IP)
+CTRL_4_CONF=$(write_controller_config 4 "$PRIV_4")
+CTRL_10_CONF=$(write_controller_config 10 "$PRIV_10")
+CLIENT_1_CONF=$(write_client_config 1 "$PRIV_1" false true)
+CLIENT_2_CONF=$(write_client_config 2 "$PRIV_2" false false)
+CLIENT_3_CONF=$(write_client_config 3 "$PRIV_3" false true)
+CLIENT_4_CONF=$(write_client_config 4 "$PRIV_4" false false)
+CLIENT_5_CONF=$(write_client_config 5 "$PRIV_5" false true)
+CLIENT_6_CONF=$(write_client_config 6 "$PRIV_6" false false)
 
 start_controllers
 start_clients
 wait_converge
 
 echo ""
-echo "=== Test 7: IP change ==="
+echo "=== Test 7: IP change via autoip_interface ==="
 
 # Baseline
 run_test "baseline: leaf-1 -> leaf-3" \
@@ -32,47 +41,25 @@ run_test "baseline: leaf-3 -> leaf-5" \
 run_test "baseline: leaf-1 -> leaf-5" \
     ip netns exec "leaf-1" ping -c 2 -W 5 "${LEAF_SUBNET_V4}.5"
 
-# Find sockets
-SOCK_1=$(find_client_sock v4 "${V4_SUBNET}.1")
-SOCK_3=$(find_client_sock v4 "${V4_SUBNET}.3")
-SOCK_5=$(find_client_sock v6 "${V6_PREFIX}5")
-echo "  Sockets: node-1=${SOCK_1:-none} node-3=${SOCK_3:-none} node-5=${SOCK_5:-none}"
-
 # Change node-1 v4: .1 -> .101
+# autoip_interface should pick up the change automatically
 echo "  Changing node-1 v4 IP: ${V4_SUBNET}.1 -> ${V4_SUBNET}.101"
 ip netns exec "node-1" ip addr del "${V4_SUBNET}.1/24" dev eth-v4 2>/dev/null || true
 ip netns exec "node-1" ip addr add "${V4_SUBNET}.101/24" dev eth-v4
-if [ -n "$SOCK_1" ]; then
-    resp=$(unix_sock_cmd "$SOCK_1" "UPDATE_BIND_ADDR v4 ${V4_SUBNET}.101" || true)
-    echo "    API: $resp"
-else
-    echo "    WARNING: no socket for node-1"
-fi
 
 # Change node-3 v4: .3 -> .103
 echo "  Changing node-3 v4 IP: ${V4_SUBNET}.3 -> ${V4_SUBNET}.103"
 ip netns exec "node-3" ip addr del "${V4_SUBNET}.3/24" dev eth-v4 2>/dev/null || true
 ip netns exec "node-3" ip addr add "${V4_SUBNET}.103/24" dev eth-v4
-if [ -n "$SOCK_3" ]; then
-    resp=$(unix_sock_cmd "$SOCK_3" "UPDATE_BIND_ADDR v4 ${V4_SUBNET}.103" || true)
-    echo "    API: $resp"
-else
-    echo "    WARNING: no socket for node-3"
-fi
 
 # Change node-5 v6: ::5 -> ::105
 echo "  Changing node-5 v6 IP: ${V6_PREFIX}5 -> ${V6_PREFIX}105"
 ip netns exec "node-5" ip addr del "${V6_PREFIX}5/64" dev eth-v6 2>/dev/null || true
 ip netns exec "node-5" ip addr add "${V6_PREFIX}105/64" dev eth-v6
-if [ -n "$SOCK_5" ]; then
-    resp=$(unix_sock_cmd "$SOCK_5" "UPDATE_BIND_ADDR v6 ${V6_PREFIX}105" || true)
-    echo "    API: $resp"
-else
-    echo "    WARNING: no socket for node-5"
-fi
 
-echo "  Waiting 25s for reconnection and state sync..."
-sleep 25
+# Wait for debounce (1s) + reconnection + state sync + probe cycle
+echo "  Waiting 40s for auto-detect, reconnection and state sync..."
+sleep 40
 
 # Verify connectivity with new IPs
 run_test "leaf-1 -> leaf-3 (after IP change)" \

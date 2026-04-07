@@ -68,13 +68,13 @@ var DefaultClientConfig = ClientConfigFile{
 
 var DefaultControllerConfig = ControllerConfigFile{
 	PrivateKey:                "<base64 private key from: wg genkey>",
-	ClientOfflineTimeout:      300,
+	ClientOfflineTimeout:      30,
 	SyncNewClientDebounce:     2,
 	SyncNewClientDebounceMax:  10,
 	TopologyUpdateDebounce:    1,
 	TopologyUpdateDebounceMax: 5,
 	Probing: ProbingConfigFile{
-		ProbeIntervalS:    60,
+		ProbeIntervalS:    5,
 		ProbeTimes:        5,
 		InProbeIntervalMs: 200,
 		ProbeTimeoutMs:    1000,

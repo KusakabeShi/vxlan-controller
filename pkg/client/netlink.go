@@ -6,10 +6,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"vxlan-controller/pkg/vlog"
-
 	"vxlan-controller/pkg/config"
 	"vxlan-controller/pkg/types"
+	"vxlan-controller/pkg/vlog"
 
 	"github.com/vishvananda/netlink"
 )
@@ -36,12 +35,21 @@ func (c *Client) initDevices() error {
 			continue
 		}
 
+		bindAddr := afCfg.BindAddr.String()
+		if !afCfg.BindAddr.IsValid() {
+			// autoip_interface with no IP resolved yet; use unspecified addr
+			if strings.Contains(strings.ToLower(string(afName)), "v6") || strings.Contains(strings.ToLower(string(afName)), "ipv6") {
+				bindAddr = "::"
+			} else {
+				bindAddr = "0.0.0.0"
+			}
+		}
 		vd := &VxlanDev{
 			AF:       afName,
 			Name:     afCfg.VxlanName,
 			VNI:      afCfg.VxlanVNI,
 			MTU:      afCfg.VxlanMTU,
-			BindAddr: afCfg.BindAddr.String(),
+			BindAddr: bindAddr,
 		}
 
 		if err := c.createVxlanDevice(vd, afCfg); err != nil {

@@ -299,7 +299,7 @@ YAML
 }
 
 write_client_config() {
-    local node=$1 privkey=$2 neigh_suppress=${3:-false}
+    local node=$1 privkey=$2 neigh_suppress=${3:-false} auto_detect=${4:-false}
     local f="$TMPDIR/client-${node}.yaml"
     local has_v4=false has_v6=false
 
@@ -317,7 +317,26 @@ address_families:
 YAML
 
     if $has_v4; then
-        cat >> "$f" << YAML
+        if $auto_detect; then
+            cat >> "$f" << YAML
+  v4:
+    enable: true
+    autoip_interface: "eth-v4"
+    probe_port: ${PROBE_PORT}
+    communication_port: ${COMM_PORT}
+    vxlan_name: "vxlan-v4"
+    vxlan_vni: ${VNI}
+    vxlan_mtu: ${VXLAN_MTU}
+    vxlan_dst_port: ${VXLAN_DSTPORT}
+    priority: 10
+    controllers:
+      - pubkey: "${PUB_4}"
+        addr: "${V4_SUBNET}.4:${COMM_PORT}"
+      - pubkey: "${PUB_10}"
+        addr: "${V4_SUBNET}.10:${COMM_PORT}"
+YAML
+        else
+            cat >> "$f" << YAML
   v4:
     enable: true
     bind_addr: "${V4_SUBNET}.${node}"
@@ -334,10 +353,30 @@ YAML
       - pubkey: "${PUB_10}"
         addr: "${V4_SUBNET}.10:${COMM_PORT}"
 YAML
+        fi
     fi
 
     if $has_v6; then
-        cat >> "$f" << YAML
+        if $auto_detect; then
+            cat >> "$f" << YAML
+  v6:
+    enable: true
+    autoip_interface: "eth-v6"
+    probe_port: $((PROBE_PORT + 1))
+    communication_port: $((COMM_PORT + 1))
+    vxlan_name: "vxlan-v6"
+    vxlan_vni: ${VNI}
+    vxlan_mtu: ${VXLAN_MTU}
+    vxlan_dst_port: ${VXLAN_DSTPORT}
+    priority: 10
+    controllers:
+      - pubkey: "${PUB_4}"
+        addr: "[${V6_PREFIX}4]:$((COMM_PORT + 1))"
+      - pubkey: "${PUB_10}"
+        addr: "[${V6_PREFIX}10]:$((COMM_PORT + 1))"
+YAML
+        else
+            cat >> "$f" << YAML
   v6:
     enable: true
     bind_addr: "${V6_PREFIX}${node}"
@@ -354,6 +393,7 @@ YAML
       - pubkey: "${PUB_10}"
         addr: "[${V6_PREFIX}10]:$((COMM_PORT + 1))"
 YAML
+        fi
     fi
 
     echo "$f"

@@ -68,6 +68,9 @@ type Controller struct {
 
 	// Client-reported multicast stats for WebUI
 	clientMcastStats map[types.ClientID]*ClientMcastStats
+
+	// Addr watch engines for autoip_interface
+	addrEngines map[types.AFName]*filter.AddrSelectEngine
 }
 
 type udpAddrKey struct {
@@ -108,15 +111,39 @@ func New(cfg *config.ControllerConfig) *Controller {
 		c.allowedKeys = append(c.allowedKeys, pc.ClientID)
 	}
 
+	// Init addr select engines for AFs with AutoIPInterface
+	c.addrEngines = make(map[types.AFName]*filter.AddrSelectEngine)
+	for afName, afCfg := range cfg.AFSettings {
+		if afCfg.AutoIPInterface == "" {
+			continue
+		}
+		engine, err := filter.NewAddrSelectEngine(afCfg.AddrSelectScript)
+		if err != nil {
+			vlog.Fatalf("[Controller] AF=%s: failed to init addr select engine: %v", afName, err)
+		}
+		c.addrEngines[afName] = engine
+	}
+
 	return c
 }
 
 func (c *Controller) Run() error {
 	vlog.Infof("[Controller] starting, ID=%s", c.ControllerID.Hex())
 
+	// Resolve initial bind addrs for AFs with autoip_interface
+	for afName, afCfg := range c.Config.AFSettings {
+		if afCfg.AutoIPInterface != "" {
+			c.resolveInitialBindAddr(afName)
+		}
+	}
+
 	// Start AF listeners
 	for afName, afCfg := range c.Config.AFSettings {
 		if !afCfg.Enable {
+			continue
+		}
+		if !afCfg.BindAddr.IsValid() {
+			vlog.Warnf("[Controller] AF=%s: no bind_addr resolved yet, skipping listener start (will start on addr change)", afName)
 			continue
 		}
 		if err := c.startAFListener(afName, afCfg); err != nil {
@@ -133,12 +160,20 @@ func (c *Controller) Run() error {
 	// Start web UI if configured
 	c.startWebUI()
 
+	// Start addr watch loop for autoip_interface
+	go c.addrWatchLoop()
+
 	<-c.ctx.Done()
 	return nil
 }
 
 func (c *Controller) Stop() {
 	c.cancel()
+
+	// Close addr select engines
+	for _, engine := range c.addrEngines {
+		engine.Close()
+	}
 
 	// Close all listeners
 	for _, al := range c.afListeners {
@@ -554,6 +589,8 @@ func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 		c.State.LatencyMatrix[srcID] = make(map[types.ClientID]*types.LatencyInfo)
 	}
 
+	now := time.Now()
+
 	for dstHex, entry := range results.Results {
 		dstID, err := types.ClientIDFromHex(dstHex)
 		if err != nil {
@@ -563,6 +600,7 @@ func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 		li := &types.LatencyInfo{
 			AFs: make(map[types.AFName]*types.AFLatency),
 		}
+		newReachable := false
 		for afStr, afResult := range entry.AfResults {
 			li.AFs[types.AFName(afStr)] = &types.AFLatency{
 				Mean:           afResult.LatencyMean,
@@ -571,8 +609,26 @@ func (c *Controller) handleProbeResults(cc *ClientConn, payload []byte) {
 				Priority:       int(afResult.Priority),
 				AdditionalCost: afResult.AdditionalCost,
 			}
+			if afResult.PacketLoss < 1.0 {
+				newReachable = true
+			}
 		}
-		c.State.LatencyMatrix[srcID][dstID] = li
+
+		if newReachable {
+			li.LastReachable = now
+			c.State.LatencyMatrix[srcID][dstID] = li
+		} else if old := c.State.LatencyMatrix[srcID][dstID]; old != nil {
+			// New result is fully unreachable — only overwrite if old data
+			// has been unreachable for longer than client_offline_timeout
+			if now.Sub(old.LastReachable) > c.Config.ClientOfflineTimeout {
+				li.LastReachable = old.LastReachable
+				c.State.LatencyMatrix[srcID][dstID] = li
+			}
+			// Otherwise keep old reachable data (transient failure)
+		} else {
+			// No old data — store the unreachable result
+			c.State.LatencyMatrix[srcID][dstID] = li
+		}
 	}
 
 	// Reset topology update debounce

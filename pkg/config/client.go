@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"vxlan-controller/pkg/filter"
@@ -28,19 +29,22 @@ type ClientConfigFile struct {
 }
 
 type ClientAFConfigFile struct {
-	Enable            bool                            `yaml:"enable"`
-	BindAddr          string                          `yaml:"bind_addr"`
-	ProbePort         uint16                          `yaml:"probe_port"`
-	CommunicationPort uint16                          `yaml:"communication_port"`
-	VxlanName         string                          `yaml:"vxlan_name"`
-	VxlanVNI          uint32                          `yaml:"vxlan_vni"`
-	VxlanMTU          int                             `yaml:"vxlan_mtu"`
-	VxlanDstPort      uint16                          `yaml:"vxlan_dst_port"`
-	VxlanSrcPortStart uint16                          `yaml:"vxlan_src_port_start"`
-	VxlanSrcPortEnd   uint16                          `yaml:"vxlan_src_port_end"`
-	Priority          int                             `yaml:"priority"`
-	AdditionalCost    float64                         `yaml:"additional_cost"`
-	Controllers       []ControllerEndpointFile        `yaml:"controllers"`
+	Enable               bool                            `yaml:"enable"`
+	BindAddr             string                          `yaml:"bind_addr"`
+	AutoIPInterface  string                          `yaml:"autoip_interface"`
+	AddrSelect           string                          `yaml:"addr_select"`
+	AddrSelectFile       string                          `yaml:"addr_select_file"`
+	ProbePort            uint16                          `yaml:"probe_port"`
+	CommunicationPort    uint16                          `yaml:"communication_port"`
+	VxlanName            string                          `yaml:"vxlan_name"`
+	VxlanVNI             uint32                          `yaml:"vxlan_vni"`
+	VxlanMTU             int                             `yaml:"vxlan_mtu"`
+	VxlanDstPort         uint16                          `yaml:"vxlan_dst_port"`
+	VxlanSrcPortStart    uint16                          `yaml:"vxlan_src_port_start"`
+	VxlanSrcPortEnd      uint16                          `yaml:"vxlan_src_port_end"`
+	Priority             int                             `yaml:"priority"`
+	AdditionalCost       float64                         `yaml:"additional_cost"`
+	Controllers          []ControllerEndpointFile        `yaml:"controllers"`
 }
 
 type ControllerEndpointFile struct {
@@ -64,20 +68,22 @@ type ClientConfig struct {
 }
 
 type ClientAFConfig struct {
-	Name              types.AFName
-	Enable            bool
-	BindAddr          netip.Addr
-	ProbePort         uint16
-	CommunicationPort uint16
-	VxlanName         string
-	VxlanVNI          uint32
-	VxlanMTU          int
-	VxlanDstPort      uint16
-	VxlanSrcPortStart uint16
-	VxlanSrcPortEnd   uint16
-	Priority          int
-	AdditionalCost    float64
-	Controllers       []ControllerEndpoint
+	Name                types.AFName
+	Enable              bool
+	BindAddr            netip.Addr
+	AutoIPInterface string
+	AddrSelectScript    string // resolved Lua code for addr selection
+	ProbePort           uint16
+	CommunicationPort   uint16
+	VxlanName           string
+	VxlanVNI            uint32
+	VxlanMTU            int
+	VxlanDstPort        uint16
+	VxlanSrcPortStart   uint16
+	VxlanSrcPortEnd     uint16
+	Priority            int
+	AdditionalCost      float64
+	Controllers         []ControllerEndpoint
 }
 
 type ControllerEndpoint struct {
@@ -152,9 +158,41 @@ func LoadClientConfig(path string) (*ClientConfig, error) {
 			AdditionalCost:    additionalCost,
 		}
 
-		af.BindAddr, err = netip.ParseAddr(afRaw.BindAddr)
-		if err != nil {
-			return nil, fmt.Errorf("af %s: invalid bind_addr: %w", name, err)
+		hasBindAddr := afRaw.BindAddr != ""
+		hasAutoDetect := afRaw.AutoIPInterface != ""
+
+		if hasBindAddr && hasAutoDetect {
+			return nil, fmt.Errorf("af %s: bind_addr and autoip_interface are mutually exclusive", name)
+		}
+		if !hasBindAddr && !hasAutoDetect {
+			return nil, fmt.Errorf("af %s: either bind_addr or autoip_interface must be set", name)
+		}
+
+		if hasAutoDetect {
+			af.AutoIPInterface = afRaw.AutoIPInterface
+			// Resolve addr_select script
+			if afRaw.AddrSelect != "" {
+				af.AddrSelectScript = afRaw.AddrSelect
+			} else if afRaw.AddrSelectFile != "" {
+				data, err := os.ReadFile(afRaw.AddrSelectFile)
+				if err != nil {
+					return nil, fmt.Errorf("af %s: read addr_select_file: %w", name, err)
+				}
+				af.AddrSelectScript = string(data)
+			} else {
+				// Default based on AF name
+				if strings.Contains(strings.ToLower(name), "v6") || strings.Contains(strings.ToLower(name), "ipv6") {
+					af.AddrSelectScript = filter.DefaultAddrSelectV6
+				} else {
+					af.AddrSelectScript = filter.DefaultAddrSelectV4
+				}
+			}
+			// BindAddr left as zero value; resolved at startup by addrWatchLoop
+		} else {
+			af.BindAddr, err = netip.ParseAddr(afRaw.BindAddr)
+			if err != nil {
+				return nil, fmt.Errorf("af %s: invalid bind_addr: %w", name, err)
+			}
 		}
 
 		for _, ctrl := range afRaw.Controllers {

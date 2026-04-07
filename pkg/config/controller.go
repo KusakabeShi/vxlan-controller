@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"vxlan-controller/pkg/filter"
@@ -41,6 +42,9 @@ type WebUINodeFile struct {
 type ControllerAFConfigFile struct {
 	Enable            bool   `yaml:"enable"`
 	BindAddr          string `yaml:"bind_addr"`
+	AutoIPInterface   string `yaml:"autoip_interface"`
+	AddrSelect        string `yaml:"addr_select"`
+	AddrSelectFile    string `yaml:"addr_select_file"`
 	CommunicationPort uint16 `yaml:"communication_port"`
 	VxlanVNI          uint32 `yaml:"vxlan_vni"`
 	VxlanDstPort      uint16 `yaml:"vxlan_dst_port"`
@@ -91,6 +95,8 @@ type ControllerAFConfig struct {
 	Name              types.AFName
 	Enable            bool
 	BindAddr          netip.Addr
+	AutoIPInterface   string
+	AddrSelectScript  string // resolved Lua code for addr selection
 	CommunicationPort uint16
 	VxlanVNI          uint32
 	VxlanDstPort      uint16
@@ -158,9 +164,38 @@ func LoadControllerConfig(path string) (*ControllerConfig, error) {
 			VxlanSrcPortEnd:   afRaw.VxlanSrcPortEnd,
 		}
 
-		af.BindAddr, err = netip.ParseAddr(afRaw.BindAddr)
-		if err != nil {
-			return nil, fmt.Errorf("af %s: invalid bind_addr: %w", name, err)
+		hasBindAddr := afRaw.BindAddr != ""
+		hasAutoIP := afRaw.AutoIPInterface != ""
+
+		if hasBindAddr && hasAutoIP {
+			return nil, fmt.Errorf("af %s: bind_addr and autoip_interface are mutually exclusive", name)
+		}
+		if !hasBindAddr && !hasAutoIP {
+			return nil, fmt.Errorf("af %s: either bind_addr or autoip_interface must be set", name)
+		}
+
+		if hasAutoIP {
+			af.AutoIPInterface = afRaw.AutoIPInterface
+			if afRaw.AddrSelect != "" {
+				af.AddrSelectScript = afRaw.AddrSelect
+			} else if afRaw.AddrSelectFile != "" {
+				data, err := os.ReadFile(afRaw.AddrSelectFile)
+				if err != nil {
+					return nil, fmt.Errorf("af %s: read addr_select_file: %w", name, err)
+				}
+				af.AddrSelectScript = string(data)
+			} else {
+				if strings.Contains(strings.ToLower(name), "v6") || strings.Contains(strings.ToLower(name), "ipv6") {
+					af.AddrSelectScript = filter.DefaultAddrSelectV6
+				} else {
+					af.AddrSelectScript = filter.DefaultAddrSelectV4
+				}
+			}
+		} else {
+			af.BindAddr, err = netip.ParseAddr(afRaw.BindAddr)
+			if err != nil {
+				return nil, fmt.Errorf("af %s: invalid bind_addr: %w", name, err)
+			}
 		}
 
 		cfg.AFSettings[afName] = af
