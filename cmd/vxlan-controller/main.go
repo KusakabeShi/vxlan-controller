@@ -16,6 +16,8 @@ import (
 	"vxlan-controller/pkg/controller"
 	"vxlan-controller/pkg/crypto"
 	"vxlan-controller/pkg/vlog"
+
+	"github.com/pkg/profile"
 )
 
 // Version is set at build time via -ldflags.
@@ -23,6 +25,7 @@ var Version = "dev"
 
 func main() {
 	// Detect mode from argv[0] for symlink usage (e.g., vxscli -> vxlan-controller)
+	defer profile.Start().Stop()
 	argv0 := filepath.Base(os.Args[0])
 
 	mode := flag.String("mode", "", "run mode: controller, client, keygen, vxscli, vxccli")
